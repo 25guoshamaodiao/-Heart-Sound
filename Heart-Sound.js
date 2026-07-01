@@ -59,11 +59,11 @@
       if (config) {
         return {
           prefix: config.prefix || '-',
-          suffix: config.suffix || ' </think> ',
+          suffix: config.suffix || '  思考结束  ',
           auto_expand: config.auto_expand
         };
       }
-      return { prefix: '-', suffix: ' </think> ', auto_expand: true };
+      return { prefix: '-', suffix: '  思考结束  ', auto_expand: true };
     },
     injectStyle: function () {
       if (document.getElementById(STYLE_ID_REASONING)) return;
@@ -180,7 +180,7 @@
   };
 
   // =====================================================================
-  // 小 COT（优化流式稳定性：只在最终状态且 DOM 稳定后渲染）
+  // 小 COT（修复闪烁版）
   // =====================================================================
   var COT = {
     NAMESPACE: 'maya-small-cot',
@@ -195,8 +195,11 @@
     touchedIds: new Set(),
     disposed: false,
     timer: undefined,
-    // 防抖：延迟确保酒馆渲染完成
     debounceTimer: undefined,
+    // [FIX] 新增：标记是否正在生成中，生成期间跳过 COT 渲染
+    isGenerating: false,
+    // [FIX] 新增：标记是否正在由 COT 自身修改 DOM，避免 MutationObserver 自循环
+    isMutating: false,
 
     injectConfig: function () {
       try {
@@ -325,16 +328,17 @@
       return '<details class="' + COT.NAMESPACE + '-fold" style="display:inline-block;width:auto;max-width:min(100%,28rem);margin:0.12rem 0 0.18rem;overflow:hidden;vertical-align:middle;color:rgba(233,236,244,.94);background:linear-gradient(135deg,rgba(19,21,28,.96),rgba(30,35,45,.94));border:1px solid rgba(172,189,224,.24);border-radius:7px;box-shadow:0 3px 10px rgba(0,0,0,.16);font-size:0.82em;line-height:1.2;box-sizing:border-box;"><summary class="' + COT.NAMESPACE + '-summary" style="display:flex;align-items:center;gap:0.28rem;min-height:1.35rem;padding:0.14rem 0.42rem;cursor:pointer;list-style:none;user-select:none;"><span class="' + COT.NAMESPACE + '-icon" style="display:inline-flex;align-items:center;justify-content:center;width:12px;height:12px;flex:0 0 12px;color:#d7c88d;overflow:hidden;">' + COT.moonSvg() + '</span><span class="' + COT.NAMESPACE + '-title" style="display:inline-flex;align-items:baseline;gap:.12rem;white-space:nowrap;color:rgba(246,241,220,.96);font-weight:650;">' + kindLabel + '</span><span class="' + COT.NAMESPACE + '-meta" style="min-width:0;overflow:hidden;color:rgba(188,198,218,.78);font-size:.82em;text-overflow:ellipsis;white-space:nowrap;opacity:.72;">' + actorLabel + ' · 已收束</span><span class="' + COT.NAMESPACE + '-chevron" style="display:inline-flex;align-items:center;justify-content:center;width:12px;height:12px;flex:0 0 12px;overflow:hidden;color:rgba(205,216,240,.76);">' + COT.chevronSvg() + '</span></summary><div class="' + COT.NAMESPACE + '-body" style="max-height:12rem;overflow-y:auto;border-top:1px solid rgba(172,189,224,.18);background:rgba(10,12,17,.28);padding:.46rem .56rem .2rem;"><section class="' + COT.NAMESPACE + '-section" style="margin:0 .42rem 0;"><div class="' + COT.NAMESPACE + '-section-head" style="display:flex;align-items:center;gap:.34rem;margin-bottom:.22rem;line-height:1.2;"><span class="' + COT.NAMESPACE + '-kind" style="flex:0 0 auto;padding:.06rem .34rem;color:rgba(244,236,199,.96);background:rgba(180,158,93,.16);border:1px solid rgba(205,188,125,.26);border-radius:999px;font-size:.78em;font-weight:650;">' + kindLabel + '</span><span class="' + COT.NAMESPACE + '-tag" style="min-width:0;overflow:hidden;color:rgba(176,190,219,.68);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.78em;text-overflow:ellipsis;white-space:nowrap;">' + tagLabel + '</span></div><div class="' + COT.NAMESPACE + '-content" style="color:rgba(229,233,242,.9);line-height:1.55;overflow-wrap:anywhere;white-space:pre-wrap;">' + contentHtml + '</div></section></div></details>';
     },
 
-    // 检查当前 DOM 中是否已经包含我们的折叠/隐藏元素
     hasCotElements: function (messageId) {
       var el = getRootDoc().querySelector('#chat .mes[mesid="' + messageId + '"] .mes_text');
       if (!el) return false;
       return el.querySelector('.' + COT.NAMESPACE + '-fold, .' + COT.NAMESPACE + '-hidden') !== null;
     },
 
-    // 核心渲染函数：仅在未折叠时执行，且依赖源文本
+    // [FIX] 核心渲染函数：增加生成期保护 + 更稳定的"是否需要重渲染"判断
     renderMessage: function (messageId, recentAssistantIds) {
       if (COT.disposed || !Number.isFinite(messageId) || COT.isEditing(messageId)) return;
+      // [FIX] 生成期间完全跳过 COT，避免流式文本变化导致反复重建
+      if (COT.isGenerating) return;
       if (!recentAssistantIds) recentAssistantIds = COT.getRecentAssistantIds();
 
       var doc = getRootDoc();
@@ -349,15 +353,21 @@
       var msgText = COT.getMessageFromChat(messageId);
       if (!msgText) return;
 
-      // 如果 DOM 中已经包含我们的元素，但签名不同，先移除旧的
+      // [FIX] 如果 DOM 中已存在 COT 元素，检查是否需要更新
       if (COT.hasCotElements(messageId)) {
         var currentSignature = COT.signatures.get(messageId);
-        if (currentSignature === mode + '\n' + msgText) return; // 完全一致，跳过
-        // 否则需要重新折叠，先清除旧元素
+        // [FIX] 只有当模式改变时才重建；流式期间文本变化不再触发重建
+        if (currentSignature && currentSignature.startsWith(mode + '|')) {
+          return; // 已渲染且模式一致，跳过
+        }
+        // 模式改变（如从 hidden 变为 fold），需要重建
         var html = textEl.innerHTML;
         html = html.replace(new RegExp('<details[^>]*class="[^"]*' + COT.NAMESPACE + '-fold[^"]*"[^>]*>[\\s\\S]*?</details>', 'gi'), '');
         html = html.replace(new RegExp('<span[^>]*class="[^"]*' + COT.NAMESPACE + '-hidden[^"]*"[^>]*>[\\s\\S]*?</span>', 'gi'), '');
+        // [FIX] 标记自身修改，避免 MutationObserver 自循环
+        COT.isMutating = true;
         textEl.innerHTML = html;
+        COT.isMutating = false;
       }
 
       // 提取所有完整闭合的 COT 对
@@ -412,11 +422,16 @@
           }
         }
 
+        // [FIX] 标记自身修改，避免 MutationObserver 自循环
+        COT.isMutating = true;
         textEl.innerHTML = html;
+        COT.isMutating = false;
         msgEl.setAttribute('data-' + COT.NAMESPACE, mode);
-        COT.signatures.set(messageId, mode + '\n' + msgText);
+        // [FIX] 签名只记录 mode，不再记录完整文本，避免流式变化导致失效
+        COT.signatures.set(messageId, mode + '|' + regions.length);
         COT.touchedIds.add(messageId);
       } catch (e) {
+        COT.isMutating = false;
         if (DEBUG) console.warn('[COT] render failed msgId=' + messageId + ':', e);
       }
     },
@@ -435,7 +450,6 @@
       }, delay || 80);
     },
 
-    // 延迟渲染，确保酒馆完成所有 DOM 操作
     debouncedQueueAll: function (delay) {
       window.clearTimeout(COT.debounceTimer);
       COT.debounceTimer = window.setTimeout(function () {
@@ -495,7 +509,6 @@
     listen('chatLoaded', function () {
       var chat = getChatArray();
       if (chat) for (var i = 0; i < chat.length; i++) if (!chat[i].is_user) REASONING.processMessage(i, false);
-      // 初始加载也延迟处理，避免与其他扩展冲突
       COT.debouncedQueueAll(500);
     }, true);
 
@@ -518,16 +531,31 @@
         REASONING.processMessage(messageId, true);
       });
 
-      // 消息接收后等待 300ms 再折叠，确保酒馆渲染完毕
+      // [FIX] 新增：生成开始时标记状态，冻结 COT 渲染
+      if (tavern_events.GENERATION_STARTED) {
+        listen(tavern_events.GENERATION_STARTED, function () {
+          COT.isGenerating = true;
+        });
+      }
+
+      // [FIX] 生成结束后统一执行一次 COT，并解除冻结
       listen(tavern_events.MESSAGE_RECEIVED, function (id) {
         setTimeout(function () {
           REASONING.processMessage(id, false);
-          // 使用延迟队列，避免被随后的酒馆重绘覆盖
-          COT.debouncedQueueAll(350);
+          // [FIX] 生成期间不触发 COT，等 GENERATION_ENDED 统一处理
+          if (!COT.isGenerating) {
+            COT.debouncedQueueAll(350);
+          }
         }, 100);
       });
-      listen(tavern_events.GENERATION_ENDED, function () { COT.debouncedQueueAll(400); });
-      listen(tavern_events.GENERATION_STOPPED, function () { COT.debouncedQueueAll(400); });
+      listen(tavern_events.GENERATION_ENDED, function () {
+        COT.isGenerating = false; // [FIX] 解除冻结
+        COT.debouncedQueueAll(400);
+      });
+      listen(tavern_events.GENERATION_STOPPED, function () {
+        COT.isGenerating = false; // [FIX] 解除冻结
+        COT.debouncedQueueAll(400);
+      });
 
       listen(tavern_events.MESSAGE_SWIPED, function () {
         var chat = getChatArray();
@@ -540,7 +568,6 @@
           var msgEl = doc.querySelector('#chat .mes[mesid="' + id + '"]');
           if (msgEl) msgEl.removeAttribute('data-' + COT.NAMESPACE);
           REASONING.processMessage(id, false);
-          // 直接渲染单条消息，不延迟
           COT.renderMessage(id, COT.getRecentAssistantIds());
         } else {
           var chat = getChatArray();
@@ -567,13 +594,13 @@
         COT.touchedIds.clear();
         COT.debouncedQueueAll(300);
       }, true);
-      // 不依赖 CHARACTER_MESSAGE_RENDERED，因为酒馆可能在之后还会重绘
     }
 
     // 观察聊天区域变化，作为最后保障
     var observer = new MutationObserver(function () {
       if (COT.disposed) return;
-      // 聊天区域有节点增删，很可能酒馆重绘了消息，延迟执行折叠
+      // [FIX] 如果变化是由 COT 自身修改引起的，直接忽略
+      if (COT.isMutating) return;
       COT.debouncedQueueAll(500);
     });
     var chatContainer = getRootDoc().getElementById('chat');
@@ -590,7 +617,7 @@
     });
     window.COT = COT;
     window.REASONING = REASONING;
-    console.info('[Maya] All-in-One v7 (COT 延迟稳定版) 已加载');
+    console.info('[Maya] All-in-One v7 (COT 防闪烁修复版) 已加载');
   }
 
   window.COT = COT;
