@@ -368,7 +368,7 @@
       var hasAllElements = existingFolds.length === regions.length;
 
       // [FIX v2] 计算内容哈希（避免长文本比较）
-      var contentHash = regions.map(function (r) { return r.tag + ':' + r.content.length; }).join('|');
+     var contentHash = regions.map(function (r) {return r.tag + ':' + r.content; }).join('|');
       var currentSignature = COT.signatures.get(messageId);
       var expectedSignature = mode + '|' + regions.length + '|' + contentHash;
 
@@ -571,8 +571,7 @@
       listen(tavern_events.MESSAGE_EDITED, function (id) {
         if (id !== undefined && id !== null) {
           var doc = getRootDoc();
-          var msgEl = doc.querySelector('#chat .mes[mesid="' + id + '"]');
-          if (msgEl) msgEl.removeAttribute('data-' + COT.NAMESPACE);
+          var msgEl = doc.querySelector('#chat .mes[mesid="' + id + '"]');          
           REASONING.processMessage(id, false);
           COT.renderMessage(id, COT.getRecentAssistantIds());
         } else {
@@ -581,20 +580,20 @@
           COT.debouncedQueueAll(400);
         }
       }, true);
-      listen(tavern_events.MESSAGE_UPDATED, function (id) {
-        setTimeout(function () {
-          if (id !== undefined && id !== null) {
-            var doc = getRootDoc();
-            var msgEl = doc.querySelector('#chat .mes[mesid="' + id + '"]');
-            if (msgEl) msgEl.removeAttribute('data-' + COT.NAMESPACE);
-            REASONING.processMessage(id, false);
-            // [FIX v2] MESSAGE_UPDATED 时传入 true 强制检查 DOM 存在性
-            COT.renderMessage(id, COT.getRecentAssistantIds(), true);
-          } else {
-            REASONING.processMessage(id, false);
-            COT.debouncedQueueAll(300);
-          }
-        }, 100);
+     listen(tavern_events.MESSAGE_UPDATED, function (id) {
+  setTimeout(function () {
+    if (id !== undefined && id !== null) {
+      var doc = getRootDoc();
+      var msgEl = doc.querySelector('#chat .mes[mesid="' + id + '"]');
+       
+      REASONING.processMessage(id, false);
+      // 不再强制渲染，由签名控制
+      COT.renderMessage(id, COT.getRecentAssistantIds());
+    } else {
+      REASONING.processMessage(id, false);
+      COT.debouncedQueueAll(300);
+    }
+  }, 100);
       });
       listen(tavern_events.MESSAGE_DELETED, function () {
         COT.signatures.clear();
@@ -604,12 +603,30 @@
     }
 
     // 观察聊天区域变化，作为最后保障
-    var observer = new MutationObserver(function () {
-      if (COT.disposed) return;
-      // [FIX] 如果变化是由 COT 自身修改引起的，直接忽略
-      if (COT.isMutating) return;
-      COT.debouncedQueueAll(500);
-    });
+var observer = new MutationObserver(function (mutations) {
+  if (COT.isMutating) return;
+  // 检查是否涉及消息列表的结构变化（新增/删除消息）
+  var needsUpdate = false;
+  for (var i = 0; i < mutations.length; i++) {
+    var m = mutations[i];
+    if (m.type === 'childList') {
+      // 如果新增或删除了 .mes 元素，则需要更新
+      if (m.addedNodes.length > 0 || m.removedNodes.length > 0) {
+        var nodes = m.addedNodes.length ? m.addedNodes : m.removedNodes;
+        for (var j = 0; j < nodes.length; j++) {
+          if (nodes[j].classList && nodes[j].classList.contains('mes')) {
+            needsUpdate = true;
+            break;
+          }
+        }
+      }
+    }
+    // 如果其他插件修改了属性或文本，但我们不关心，避免触发
+  }
+  if (needsUpdate) {
+    COT.debouncedQueueAll(500);
+  }
+});
     var chatContainer = getRootDoc().getElementById('chat');
     if (chatContainer) {
       observer.observe(chatContainer, { childList: true, subtree: true });
