@@ -335,10 +335,11 @@
     },
 
     // [FIX] 核心渲染函数：增加生成期保护 + 更稳定的"是否需要重渲染"判断
-    renderMessage: function (messageId, recentAssistantIds) {
+    // [FIX v2] 核心渲染函数：签名改为"模式+数量+内容哈希"，并增加DOM存在性强制检查
+    renderMessage: function (messageId, recentAssistantIds, force) {
       if (COT.disposed || !Number.isFinite(messageId) || COT.isEditing(messageId)) return;
-      // [FIX] 生成期间完全跳过 COT，避免流式文本变化导致反复重建
-      if (COT.isGenerating) return;
+      // 生成期间完全跳过 COT
+      if (COT.isGenerating && !force) return;
       if (!recentAssistantIds) recentAssistantIds = COT.getRecentAssistantIds();
 
       var doc = getRootDoc();
@@ -353,23 +354,6 @@
       var msgText = COT.getMessageFromChat(messageId);
       if (!msgText) return;
 
-      // [FIX] 如果 DOM 中已存在 COT 元素，检查是否需要更新
-      if (COT.hasCotElements(messageId)) {
-        var currentSignature = COT.signatures.get(messageId);
-        // [FIX] 只有当模式改变时才重建；流式期间文本变化不再触发重建
-        if (currentSignature && currentSignature.startsWith(mode + '|')) {
-          return; // 已渲染且模式一致，跳过
-        }
-        // 模式改变（如从 hidden 变为 fold），需要重建
-        var html = textEl.innerHTML;
-        html = html.replace(new RegExp('<details[^>]*class="[^"]*' + COT.NAMESPACE + '-fold[^"]*"[^>]*>[\\s\\S]*?</details>', 'gi'), '');
-        html = html.replace(new RegExp('<span[^>]*class="[^"]*' + COT.NAMESPACE + '-hidden[^"]*"[^>]*>[\\s\\S]*?</span>', 'gi'), '');
-        // [FIX] 标记自身修改，避免 MutationObserver 自循环
-        COT.isMutating = true;
-        textEl.innerHTML = html;
-        COT.isMutating = false;
-      }
-
       // 提取所有完整闭合的 COT 对
       var regions = [];
       var pairRe = /<([^<>\s/]+_(?:信息判定|行为逻辑|心里话))\s*>([\s\S]*?)<\/\1>/g;
@@ -378,6 +362,30 @@
         regions.push({ tag: m[1], content: m[2] });
       }
       if (regions.length === 0) return;
+
+      // [FIX v2] 检查 DOM 中是否已存在对应数量的 COT 元素
+      var existingFolds = textEl.querySelectorAll('.' + COT.NAMESPACE + '-fold, .' + COT.NAMESPACE + '-hidden');
+      var hasAllElements = existingFolds.length === regions.length;
+
+      // [FIX v2] 计算内容哈希（避免长文本比较）
+      var contentHash = regions.map(function (r) { return r.tag + ':' + r.content.length; }).join('|');
+      var currentSignature = COT.signatures.get(messageId);
+      var expectedSignature = mode + '|' + regions.length + '|' + contentHash;
+
+      // [FIX v2] 如果签名一致且 DOM 元素数量也对得上，说明渲染完好，跳过
+      if (!force && currentSignature === expectedSignature && hasAllElements) {
+        return;
+      }
+
+      // 需要重新渲染：先清除旧的
+      if (existingFolds.length > 0) {
+        var html = textEl.innerHTML;
+        html = html.replace(new RegExp('<details[^>]*class="[^"]*' + COT.NAMESPACE + '-fold[^"]*"[^>]*>[\\s\\S]*?</details>', 'gi'), '');
+        html = html.replace(new RegExp('<span[^>]*class="[^"]*' + COT.NAMESPACE + '-hidden[^"]*"[^>]*>[\\s\\S]*?</span>', 'gi'), '');
+        COT.isMutating = true;
+        textEl.innerHTML = html;
+        COT.isMutating = false;
+      }
 
       try {
         var html = textEl.innerHTML;
@@ -399,7 +407,6 @@
             html = html.slice(0, startIdx) + foldHtml + html.slice(endIdx + escapedClose.length);
             searchFrom = startIdx + foldHtml.length;
           } else {
-            // 闭标签被删除的兜底逻辑
             var contentText = region.content.trim();
             if (contentText) {
               var plainContent = contentText.replace(/[*_~`]/g, '');
@@ -422,13 +429,12 @@
           }
         }
 
-        // [FIX] 标记自身修改，避免 MutationObserver 自循环
         COT.isMutating = true;
         textEl.innerHTML = html;
         COT.isMutating = false;
         msgEl.setAttribute('data-' + COT.NAMESPACE, mode);
-        // [FIX] 签名只记录 mode，不再记录完整文本，避免流式变化导致失效
-        COT.signatures.set(messageId, mode + '|' + regions.length);
+        // [FIX v2] 签名包含内容哈希，确保内容变化时也会重渲染
+        COT.signatures.set(messageId, expectedSignature);
         COT.touchedIds.add(messageId);
       } catch (e) {
         COT.isMutating = false;
@@ -582,7 +588,8 @@
             var msgEl = doc.querySelector('#chat .mes[mesid="' + id + '"]');
             if (msgEl) msgEl.removeAttribute('data-' + COT.NAMESPACE);
             REASONING.processMessage(id, false);
-            COT.renderMessage(id, COT.getRecentAssistantIds());
+            // [FIX v2] MESSAGE_UPDATED 时传入 true 强制检查 DOM 存在性
+            COT.renderMessage(id, COT.getRecentAssistantIds(), true);
           } else {
             REASONING.processMessage(id, false);
             COT.debouncedQueueAll(300);
