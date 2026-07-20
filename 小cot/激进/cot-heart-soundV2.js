@@ -22,16 +22,20 @@
   })();
   var APP_DOCUMENT = APP_WINDOW.document || document;
 
-  // ---------- 心里话分离开关（持久化到脚本变量） ----------
-  var SEPARATE_HEART = (function () {
-    try {
-      if (typeof getVariables === 'function') {
-        var v = getVariables({ type: 'script', script_id: getScriptId() });
-        return !!(v && v.separateHeart);
+// ---------- 心里话分离开关（持久化到脚本变量） ----------
+var SEPARATE_HEART = (function () {
+  try {
+    if (typeof getVariables === 'function') {
+      var v = getVariables({ type: 'script', script_id: getScriptId() });
+      // 如果用户从未设置过，默认启用；否则读取用户设置
+      if (v && v.separateHeart !== undefined) {
+        return !!v.separateHeart;
       }
-    } catch (_) { /* noop */ }
-    return false;
-  })();
+      return true; // 默认打开
+    }
+  } catch (_) { /* noop */ }
+  return true; // 默认打开
+})();
 
   // ==========================================================================
   // 正则表达式

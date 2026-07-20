@@ -23,7 +23,7 @@
   var APP_DOCUMENT = APP_WINDOW.document || document;
 
   // ---------- 心里话分离开关 ----------
-  var SEPARATE_HEART = false;
+  var SEPARATE_HEART = true;
 
   // ==========================================================================
   // 正则表达式
