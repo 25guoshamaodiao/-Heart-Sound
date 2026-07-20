@@ -1378,40 +1378,10 @@ var SEPARATE_HEART = (function () {
     }
   }
 
-  // ---------- 绑定“心音”按钮（立即渲染） ----------
+  // ---------- 绑定“心音”按钮（已合并到 injectHeartButton，此函数保留作兼容） ----------
+  // 不再使用。按钮点击处理由 injectHeartButton 中的 eventOn 或 exec 负责。
   function bindToggleHeartButton() {
-    var buttonName = '心音';
-    var eventName = null;
-    try {
-      if (typeof getButtonEvent === 'function') {
-        eventName = getButtonEvent(buttonName);
-      }
-    } catch (_) {}
-    if (!eventName) {
-      logWarn('无法获取按钮事件 "' + buttonName + '"，请确保输入助手已加载且按钮存在。');
-      return;
-    }
-
-    listenEvent(
-      eventName,
-      function () {
-        SEPARATE_HEART = !SEPARATE_HEART;
-        try {
-          if (typeof replaceVariables === 'function') {
-            replaceVariables({ separateHeart: SEPARATE_HEART }, { type: 'script', script_id: getScriptId() });
-          }
-        } catch (_) { /* noop */ }
-        renderAllNow('heart-toggle');
-        try {
-          if (typeof toastr !== 'undefined' && toastr.success) {
-            toastr.success('心里话分离 ' + (SEPARATE_HEART ? '已启用' : '已关闭'));
-          } else {
-            console.log('[小COT] 心里话分离 ' + (SEPARATE_HEART ? '已启用' : '已关闭'));
-          }
-        } catch (_) {}
-      },
-      false,
-    );
+    // 空函数，保留以防外部调用
   }
 
   function bindEvents() {
@@ -1670,46 +1640,78 @@ var SEPARATE_HEART = (function () {
 // 自动注入“心音”按钮
 // ==========================================================================
 
+/** 心音切换逻辑（提取为公共函数，避免重复） */
+function createHeartToggle() {
+  return function () {
+    SEPARATE_HEART = !SEPARATE_HEART;
+    try {
+      if (typeof replaceVariables === 'function') {
+        replaceVariables({ separateHeart: SEPARATE_HEART }, { type: 'script', script_id: getScriptId() });
+      }
+    } catch (_) { /* noop */ }
+    renderAllNow('heart-toggle');
+    try {
+      if (typeof toastr !== 'undefined' && toastr.success) {
+        toastr.success('心里话分离 ' + (SEPARATE_HEART ? '已启用' : '已关闭'));
+      } else {
+        console.log('[小COT] 心里话分离 ' + (SEPARATE_HEART ? '已启用' : '已关闭'));
+      }
+    } catch (_) {}
+  };
+}
+
 function injectHeartButton() {
   try {
-    // 检查是否已存在“心音”按钮
-    var existingButtons = getScriptButtons ? getScriptButtons() : [];
-    var hasHeartButton = existingButtons.some(function(b) { return b.name === '心音'; });
-    
-    if (hasHeartButton) {
+    var buttonName = '心音';
+    var heartToggle = createHeartToggle();
+    var buttonConfig = {
+      name: buttonName,
+      visible: true,
+      description: '切换心里话是否独立折叠',
+      exec: heartToggle,
+    };
+
+    // ---------- 方式A（推荐）：registerScriptButton ----------
+    // 它会注册按钮、返回事件名，让 getButtonEvent 能查找到。
+    if (typeof registerScriptButton === 'function') {
+      var eventName = registerScriptButton(buttonName, buttonConfig);
+      if (eventName) {
+        // 用事件机制绑定点击处理，确保点击有响应
+        if (typeof eventOn === 'function') {
+          var wrapped = typeof errorCatched === 'function' ? errorCatched(heartToggle) : heartToggle;
+          eventOn(eventName, wrapped);
+        }
+        console.log('[小COT] 心音按钮已注册（registerScriptButton）事件名=' + eventName);
+      } else {
+        console.warn('[小COT] registerScriptButton 返回空事件名');
+      }
+      return;
+    }
+
+    // ---------- 方式B：replaceScriptButtons + getButtonEvent（回退） ----------
+    var existingButtons = typeof getScriptButtons === 'function' ? getScriptButtons() : [];
+    if (existingButtons.some(function (b) { return b.name === buttonName; })) {
       console.log('[小COT] 心音按钮已存在，跳过注入');
       return;
     }
 
-    // 定义新按钮
-    var newButton = {
-      name: '心音',
-      visible: true,
-      description: '切换心里话是否独立折叠',
-      exec: function() {
-        SEPARATE_HEART = !SEPARATE_HEART;
-        try {
-          if (typeof replaceVariables === 'function') {
-            replaceVariables({ separateHeart: SEPARATE_HEART }, { type: 'script', script_id: getScriptId() });
-          }
-        } catch (_) { /* noop */ }
-        renderAllNow('heart-toggle');
-        try {
-          if (typeof toastr !== 'undefined' && toastr.success) {
-            toastr.success('心里话分离 ' + (SEPARATE_HEART ? '已启用' : '已关闭'));
-          } else {
-            console.log('[小COT] 心里话分离 ' + (SEPARATE_HEART ? '已启用' : '已关闭'));
-          }
-        } catch (_) {}
-      }
-    };
-
-    // 使用 replaceScriptButtons 注入
+    var allButtons = typeof getScriptButtons === 'function' ? getScriptButtons() : [];
+    allButtons.push(buttonConfig);
     if (typeof replaceScriptButtons === 'function') {
-      var allButtons = getScriptButtons ? getScriptButtons() : [];
-      allButtons.push(newButton);
       replaceScriptButtons(allButtons);
-      console.log('[小COT] 心音按钮已自动注入');
+      console.log('[小COT] 心音按钮已注入（replaceScriptButtons），尝试绑定事件…');
+      // 延迟等待系统处理按钮列表，然后获取事件名并绑定
+      setTimeout(function () {
+        var evtName = typeof getButtonEvent === 'function' ? getButtonEvent(buttonName) : null;
+        if (evtName && typeof eventOn === 'function') {
+          var wrapped = typeof errorCatched === 'function' ? errorCatched(heartToggle) : heartToggle;
+          eventOn(evtName, wrapped);
+          console.log('[小COT] 心音按钮事件已绑定');
+        } else {
+          // 即使事件绑定失败，按钮的 exec 也可能被系统调用（视 SillyTavern 版本而定）
+          console.warn('[小COT] 心音按钮事件获取失败，exec 将作为后备');
+        }
+      }, 300);
     } else {
       console.warn('[小COT] replaceScriptButtons 不可用，无法自动注入按钮');
     }
@@ -1722,8 +1724,7 @@ function init() {
   cleanupFrontendCodeLabels();
   exposeDebugApi();
   bindEvents();
-  injectHeartButton(); // 新增：自动注入按钮
-  bindToggleHeartButton(); //可以删除或保留（但按钮已自动注入，不需要再监听事件）
+  injectHeartButton(); // 自动注入按钮 + 绑定事件（已集成 registerScriptButton）
   startDomObserver();
   startStartupScanLoop();
   for (var i = 0; i < INIT_RENDER_DELAYS.length; i++) {

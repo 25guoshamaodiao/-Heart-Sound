@@ -1,0 +1,2 @@
+[permissions]
+allow = ["Edit", "Bash(cd \"D:/-Heart-Sound\" && sed -n '1381,1415p' \"小cot/激进/cot-heart-soundV2.js\" | cat -A)", "Bash(cd \"D:/-Heart-Sound\" && hexdump -C \"小cot/激进/cot-heart-soundV2.js\" | head -5)", "Bash(cd \"D:/-Heart-Sound\" && file \"小cot/激进/cot-heart-soundV2.js\" && head -c 500 \"小cot/激进/cot-heart-soundV2.js\" | od -c | head -10)"]
