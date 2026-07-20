@@ -1348,10 +1348,34 @@
     }
   }
 
-  // ---------- 绑定“心音”按钮（已合并到 injectHeartButton，此函数保留作兼容） ----------
-  // 不再使用。按钮点击处理由 injectHeartButton 中的 eventOn 或 exec 负责。
+  // ---------- 绑定“心音”按钮（立即渲染） ----------
   function bindToggleHeartButton() {
-    // 空函数，保留以防外部调用
+    var buttonName = '心音';
+    var eventName = null;
+    try {
+      if (typeof getButtonEvent === 'function') {
+        eventName = getButtonEvent(buttonName);
+      }
+    } catch (_) {}
+    if (!eventName) {
+      logWarn('无法获取按钮事件 \"' + buttonName + '\"，请确保输入助手已加载且按钮存在。');
+      return;
+    }
+
+    listenEvent(
+      eventName,
+      function () {    SEPARATE_HEART = !SEPARATE_HEART;
+        renderAllNow('heart-toggle');
+        try {
+          if (typeof toastr !== 'undefined' && toastr.success) {
+            toastr.success('心里话分离 ' + (SEPARATE_HEART ? '已启用' : '已关闭'));
+          } else {
+            console.log('[小COT] 心里话分离 ' + (SEPARATE_HEART ? '已启用' : '已关闭'));
+          }
+        } catch (_) {}
+      },
+      false,
+    );
   }
   function bindEvents() {
     listenEvent(
@@ -1608,14 +1632,13 @@
 // 自动注入“心音”按钮
 // ==========================================================================
 /** 心音切换逻辑（提取为公共函数，避免重复） */
+var _heartToggleLock = false;
 function createHeartToggle() {
   return function () {
+    if (_heartToggleLock) return;
+    _heartToggleLock = true;
+    setTimeout(function () { _heartToggleLock = false; }, 100);
     SEPARATE_HEART = !SEPARATE_HEART;
-    try {
-      if (typeof replaceVariables === 'function') {
-        replaceVariables({ separateHeart: SEPARATE_HEART }, { type: 'script', script_id: getScriptId() });
-      }
-    } catch (_) { /* noop */ }
     renderAllNow('heart-toggle');
     try {
       if (typeof toastr !== 'undefined' && toastr.success) {
@@ -1638,14 +1661,12 @@ function injectHeartButton() {
       exec: heartToggle,
     };
 
-    // ---------- 方式A（推荐）：registerScriptButton ----------
+    // ---------- registerScriptButton 注册（推荐）----------
+    // 注册按钮到系统，让 getButtonEvent 能查找到事件名。
+    // 事件绑定由 bindToggleHeartButton 统一处理。
     if (typeof registerScriptButton === 'function') {
       var eventName = registerScriptButton(buttonName, buttonConfig);
       if (eventName) {
-        if (typeof eventOn === 'function') {
-          var wrapped = typeof errorCatched === 'function' ? errorCatched(heartToggle) : heartToggle;
-          eventOn(eventName, wrapped);
-        }
         console.log('[小COT] 心音按钮已注册（registerScriptButton）事件名=' + eventName);
       } else {
         console.warn('[小COT] registerScriptButton 返回空事件名');
@@ -1653,7 +1674,7 @@ function injectHeartButton() {
       return;
     }
 
-    // ---------- 方式B：replaceScriptButtons + getButtonEvent（回退） ----------
+    // ---------- replaceScriptButtons 注入（回退）----------
     var existingButtons = typeof getScriptButtons === 'function' ? getScriptButtons() : [];
     if (existingButtons.some(function (b) { return b.name === buttonName; })) {
       console.log('[小COT] 心音按钮已存在，跳过注入');
@@ -1664,17 +1685,7 @@ function injectHeartButton() {
     allButtons.push(buttonConfig);
     if (typeof replaceScriptButtons === 'function') {
       replaceScriptButtons(allButtons);
-      console.log('[小COT] 心音按钮已注入（replaceScriptButtons），尝试绑定事件…');
-      setTimeout(function () {
-        var evtName = typeof getButtonEvent === 'function' ? getButtonEvent(buttonName) : null;
-        if (evtName && typeof eventOn === 'function') {
-          var wrapped = typeof errorCatched === 'function' ? errorCatched(heartToggle) : heartToggle;
-          eventOn(evtName, wrapped);
-          console.log('[小COT] 心音按钮事件已绑定');
-        } else {
-          console.warn('[小COT] 心音按钮事件获取失败，exec 将作为后备');
-        }
-      }, 300);
+      console.log('[小COT] 心音按钮已注入（replaceScriptButtons），请确保手动创建按钮以便绑定事件');
     } else {
       console.warn('[小COT] replaceScriptButtons 不可用，无法自动注入按钮');
     }
@@ -1687,7 +1698,8 @@ function init() {
   cleanupFrontendCodeLabels();
   exposeDebugApi();
   bindEvents();
-  injectHeartButton(); // 自动注入按钮 + 绑定事件（已集成 registerScriptButton）
+  injectHeartButton(); // 先注册按钮到系统
+  bindToggleHeartButton(); // 再通过 getButtonEvent 绑定事件
   startDomObserver();
   startStartupScanLoop();
   for (var i = 0; i < INIT_RENDER_DELAYS.length; i++) {
