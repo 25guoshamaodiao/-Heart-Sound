@@ -1723,7 +1723,7 @@ function init() {
   exposeDebugApi();
   bindEvents();
   injectHeartButton(); // 新增：自动注入按钮
-  // 注意：bindToggleHeartButton 可以删除或保留（但按钮已自动注入，不需要再监听事件）
+  bindToggleHeartButton //可以删除或保留（但按钮已自动注入，不需要再监听事件）
   startDomObserver();
   startStartupScanLoop();
   for (var i = 0; i < INIT_RENDER_DELAYS.length; i++) {
