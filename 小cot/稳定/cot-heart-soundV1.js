@@ -1630,21 +1630,72 @@
     var style = APP_DOCUMENT.getElementById(styleId());
     if (style) style.remove();
   }
+// ==========================================================================
+// 自动注入“心音”按钮
+// ==========================================================================
 
-  function init() {
-    ensureStyle();
-    cleanupFrontendCodeLabels();
-    exposeDebugApi();
-    bindEvents();
-    bindToggleHeartButton(); // 绑定按钮
-    startDomObserver();
-    startStartupScanLoop();
-    for (var i = 0; i < INIT_RENDER_DELAYS.length; i++) {
-      scheduleDisplayedMessages(INIT_RENDER_DELAYS[i], 'init');
+function injectHeartButton() {
+  try {
+    // 检查是否已存在“心音”按钮
+    var existingButtons = getScriptButtons ? getScriptButtons() : [];
+    var hasHeartButton = existingButtons.some(function(b) { return b.name === '心音'; });
+    
+    if (hasHeartButton) {
+      console.log('[小COT] 心音按钮已存在，跳过注入');
+      return;
     }
-    window.addEventListener('pagehide', dispose, { once: true });
-    console.warn('[小COT V4] 心里话分离增强版 就绪');
+
+    // 定义新按钮
+    var newButton = {
+      name: '心音',
+      visible: true,
+      description: '切换心里话是否独立折叠',
+      exec: function() {
+        SEPARATE_HEART = !SEPARATE_HEART;
+        try {
+          if (typeof replaceVariables === 'function') {
+            replaceVariables({ separateHeart: SEPARATE_HEART }, { type: 'script', script_id: getScriptId() });
+          }
+        } catch (_) { /* noop */ }
+        renderAllNow('heart-toggle');
+        try {
+          if (typeof toastr !== 'undefined' && toastr.success) {
+            toastr.success('心里话分离 ' + (SEPARATE_HEART ? '已启用' : '已关闭'));
+          } else {
+            console.log('[小COT] 心里话分离 ' + (SEPARATE_HEART ? '已启用' : '已关闭'));
+          }
+        } catch (_) {}
+      }
+    };
+
+    // 使用 replaceScriptButtons 注入
+    if (typeof replaceScriptButtons === 'function') {
+      var allButtons = getScriptButtons ? getScriptButtons() : [];
+      allButtons.push(newButton);
+      replaceScriptButtons(allButtons);
+      console.log('[小COT] 心音按钮已自动注入');
+    } else {
+      console.warn('[小COT] replaceScriptButtons 不可用，无法自动注入按钮');
+    }
+  } catch (error) {
+    logWarn('注入心音按钮失败', error);
   }
+}
+function init() {
+  ensureStyle();
+  cleanupFrontendCodeLabels();
+  exposeDebugApi();
+  bindEvents();
+  injectHeartButton(); // 新增：自动注入按钮
+  // 注意：bindToggleHeartButton 可以删除或保留（但按钮已自动注入，不需要再监听事件）
+  startDomObserver();
+  startStartupScanLoop();
+  for (var i = 0; i < INIT_RENDER_DELAYS.length; i++) {
+    scheduleDisplayedMessages(INIT_RENDER_DELAYS[i], 'init');
+  }
+  window.addEventListener('pagehide', dispose, { once: true });
+  console.warn('[小COT V4] 心里话分离增强版 就绪');
+}
 
   // ---------- 启动 ----------
   function ready(fn) {
