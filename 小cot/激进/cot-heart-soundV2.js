@@ -715,6 +715,9 @@ var SEPARATE_HEART = (function () {
           if (isSameChar(srcChar, domChar)) {
             walker.advance();
             srcPos++;
+          } else if (srcChar === '*' || srcChar === '_' || srcChar === '`' || srcChar === '~') {
+            // ★ 修复：跳过markdown语法字符（DOM中已渲染消失）
+            srcPos++;
           } else {
             walker.advance();
           }
