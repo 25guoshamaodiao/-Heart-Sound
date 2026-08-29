@@ -3,6 +3,18 @@
   const STYLE_ID = `reasoning-style-${SCRIPT_ID}`;
   const DEBUG = false; // 关闭调试日志
 
+  // ===================== 可配置项 =====================
+  const CONFIG = {
+    manageReasoningConfig: true,
+    onlyIfUnset: true,
+    prefix: "\\[metacognition\\]",
+    suffix: "</thinking>",
+    autoParse: true,
+    thinkingTitle: "✦ 掬水月在手，弄花香满衣",
+    doneTitle: "✦ 银月照积雪",
+    doneSubtitle: "—— 银月照积雪，流光正徘徊 ——",
+  };
+
   function log(...args) {
     if (DEBUG) console.log("[SilverMoon]", ...args);
   }
@@ -19,16 +31,68 @@
     return typeof SillyTavern !== "undefined" ? SillyTavern : null;
   }
 
-  // 主动创建并覆盖 reasoning 配置，确保本脚本样式生效
+  // ===================== reasoning 配置管理 =====================
+  // 原版会无条件覆盖用户的 reasoning 解析配置（auto_parse / prefix / suffix），
+  // 有两个问题：
+  //   1. 用户自己配置好的解析标记会被静默破坏；
+  //   2. prefix/suffix 会被 SillyTavern 当作正则编译，
+  //      未转义的 "[metacognition]" 会变成字符类，导致解析错乱。
+  // 现改为：仅在用户从未配置时写入默认值（可强制），并在脚本清理时恢复现场。
+
+  let savedReasoningState = null; // 首次写入前的备份 { existed, auto_parse, prefix, suffix }
+
   function injectConfig() {
+    if (!CONFIG.manageReasoningConfig) return;
     const context = getST()?.getContext?.();
     if (!context) return;
     const settings = context.powerUserSettings ?? (context.powerUserSettings = {});
     if (!settings.reasoning) settings.reasoning = {};
     const config = settings.reasoning;
-    config.auto_parse = true;
-    config.prefix = "[metacognition]";
-    config.suffix = "</thinking>";
+
+    // 备份用户原始配置（仅一次，供清理时恢复）
+    if (savedReasoningState === null) {
+      savedReasoningState = {
+        existed: Object.prototype.hasOwnProperty.call(settings, 'reasoning'),
+        auto_parse: config.auto_parse,
+        prefix: config.prefix,
+        suffix: config.suffix,
+      };
+    }
+
+    const userConfigured = Boolean(config.prefix || config.suffix);
+    if (CONFIG.onlyIfUnset && userConfigured) {
+      // 尊重用户配置：仅当 auto_parse 从未显式设置时才补一个默认开启
+      if (config.auto_parse === undefined) config.auto_parse = CONFIG.autoParse;
+    } else {
+      config.auto_parse = CONFIG.autoParse;
+      config.prefix = CONFIG.prefix;
+      config.suffix = CONFIG.suffix;
+    }
+
+    // 持久化，避免刷新后设置丢失
+    const save = getST()?.saveSettingsDebounced;
+    if (typeof save === 'function') {
+      try { save(); } catch (_) { /* noop */ }
+    }
+  }
+
+  function restoreReasoningConfig() {
+    if (savedReasoningState === null) return;
+    try {
+      const context = getST()?.getContext?.();
+      const settings = context && context.powerUserSettings;
+      if (settings && settings.reasoning) {
+        const config = settings.reasoning;
+        config.auto_parse = savedReasoningState.auto_parse;
+        config.prefix = savedReasoningState.prefix;
+        config.suffix = savedReasoningState.suffix;
+        // 原本不存在 reasoning 键时整体移除，避免残留空对象
+        if (!savedReasoningState.existed) delete settings.reasoning;
+        const save = getST()?.saveSettingsDebounced;
+        if (typeof save === 'function') save();
+      }
+    } catch (_) { /* noop */ }
+    savedReasoningState = null;
   }
 
   // ===================== CSS（性能优化版） =====================
@@ -175,7 +239,7 @@
 
 /* 思考中标题（带呼吸动画，仅 opacity + transform） */
 #chat .mes_reasoning_details[data-state="thinking"] .mes_reasoning_header_title::before {
-    content: '\2726 掬水月在手，弄花香满衣';
+    content: '${CONFIG.thinkingTitle}';
     color: rgba(180,195,215,0.70);
     text-shadow: 0 0 18px rgba(180,195,215,0.20);
     animation: sm-title-pulse 3.2s ease-in-out infinite;
@@ -187,14 +251,14 @@
 
 /* 完成时标题（静态，无动画） */
 #chat .mes_reasoning_details[data-state="done"] .mes_reasoning_header_title::before {
-    content: '\2726 银月照积雪';
+    content: '${CONFIG.doneTitle}';
     color: #bcc8d8;
     text-shadow: 0 0 28px rgba(180,195,215,0.50), 0 0 56px rgba(180,195,215,0.20);
     /* 无动画 */
 }
 /* 副标题（淡入一次） */
 #chat .mes_reasoning_details[data-state="done"] .mes_reasoning_header_title::after {
-    content: '\2014\2014 银月照积雪，流光正徘徊 \2014\2014';
+    content: '${CONFIG.doneSubtitle}';
     font-size: 0.68rem;
     font-family: 'Noto Serif SC', 'STKaiti', 'KaiTi', serif;
     color: rgba(180,195,215,0.50);
@@ -298,6 +362,7 @@
 #chat .mes_reasoning_details[data-state="thinking"] .mes_reasoning_header::after {
     background: radial-gradient(circle at 36% 34%, rgba(180,200,225,0.1) 0%, transparent 62%);
     animation: sm-crescent-glow 3.2s ease-in-out infinite;
+    will-change: transform, opacity;
 }
 @keyframes sm-crescent-glow {
     0%, 100% { opacity: 0.25; transform: translate(-19px, -50%) scale(0.88); }
@@ -378,10 +443,32 @@
     }
   }
 
+  // 完整清理：移除样式 + 恢复被本脚本改动的 reasoning 配置
+  function cleanup() {
+    removeStyle();
+    restoreReasoningConfig();
+  }
+
+  function checkCompatibility() {
+    // 本脚本针对较新版本 SillyTavern 的 reasoning 显示结构
+    // （#chat .mes_reasoning_details[data-state]）。当前页面若不存在该结构，
+    // 样式会静默失效——这里给出提示而不是让用户无从排查。
+    try {
+      if (!getTopDocument().querySelector('#chat .mes_reasoning_details')) {
+        console.warn(
+          '[SilverMoon] 未检测到 reasoning 显示结构（.mes_reasoning_details）。' +
+            '请确认 SillyTavern 版本支持思考块显示（较新版本），否则银月样式不会生效。',
+        );
+      }
+    } catch (_) { /* noop */ }
+  }
+
   function init() {
+    cleanup(); // 防御：脚本被重新加载时先清理旧实例残留，避免重复叠加
     injectConfig();
     injectStyle();
-    window.addEventListener("pagehide", removeStyle);
+    checkCompatibility();
+    window.addEventListener("pagehide", cleanup);
     log("SilverMoon styler initialized (lightweight).");
   }
 
