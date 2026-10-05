@@ -595,7 +595,11 @@ var SEPARATE_HEART = (function () {
       }
     }
     if (regions.length > 0) {
-      regions[regions.length - 1].bodyTextAfter = true;
+      // 最后一段：仅当闭合标签之后还有非空白内容时才标记 bodyTextAfter
+      var tail = messageText.slice(regions[regions.length - 1].closeEnd);
+      if (tail.replace(/[\s\u00A0]+/g, '') !== '') {
+        regions[regions.length - 1].bodyTextAfter = true;
+      }
     }
 
     return regions;
@@ -730,11 +734,13 @@ var SEPARATE_HEART = (function () {
           closeEndNode = domOpenTags[idx + 1].node;
           closeEndOffset = domOpenTags[idx + 1].openStartOffset;
         } else {
-          // 兜底：反向搜索 </ 定位关闭标签，避免误伤正文
+          // 兜底：从打开标签位置【前向】搜索最近的 </ 定位关闭标签。
+          // 原实现从消息末尾反向找最后一个 </，会跨越标签后的正文误伤后续内容。
           var fallbackFound = false;
-          for (var k = textNodes.length - 1; k >= domTag.nodeIndex; k--) {
+          for (var k = domTag.nodeIndex; k < textNodes.length; k++) {
             var t = textNodes[k].textContent;
-            var closeIdx = t.lastIndexOf('</');
+            var searchFrom = k === domTag.nodeIndex ? domTag.openEndOffset : 0;
+            var closeIdx = t.indexOf('</', searchFrom);
             if (closeIdx !== -1) {
               closeEndNode = textNodes[k];
               closeEndOffset = closeIdx;
@@ -1324,6 +1330,8 @@ var SEPARATE_HEART = (function () {
         getHeartSeparate: function () {
           return SEPARATE_HEART;
         },
+        // 暴露清理入口：脚本重载/重复加载时由新实例调用，避免旧实例残留
+        dispose: dispose,
       };
     } catch (_) {
       /* noop */
@@ -1663,6 +1671,8 @@ var SEPARATE_HEART = (function () {
       }
     }
     state.stopList = [];
+    state.processed.clear();
+    state.probes.clear();
     restoreTouchedMessages();
     var style = APP_DOCUMENT.getElementById(styleId());
     if (style) style.remove();
@@ -1740,6 +1750,13 @@ function injectHeartButton() {
   }
 }
 function init() {
+  // 防御：脚本被重新加载（或重复添加）时，先清理旧实例，
+  // 避免重复的事件监听 / MutationObserver / 心音按钮双重绑定。
+  try {
+    if (APP_WINDOW.__mayaCotV2Debug && typeof APP_WINDOW.__mayaCotV2Debug.dispose === 'function') {
+      APP_WINDOW.__mayaCotV2Debug.dispose();
+    }
+  } catch (_) { /* noop */ }
   ensureStyle();
   cleanupFrontendCodeLabels();
   exposeDebugApi();

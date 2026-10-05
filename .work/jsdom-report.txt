@@ -1,0 +1,150 @@
+target = 思维链\银月\silver-moon-blocks-inline.js
+harnessDone = true
+
+===== 顶层节点结构/位置对照 =====
+---- 消息 0 ： A 18 个顶层节点 / B 18 个 ----
+  #0 ✓  A=p(t0,h0)  B=p(t0,h0)  
+  #1 ✓  A=details(t0,h0)  B=details(t0,h0)  小左 · 记忆与逻辑小左在这里推理。 第二行
+  #2 ✗  A=br(t0,h0)  B=p(t0,h0)  
+  #3 ✓  A=details(t0,h0)  B=details(t0,h0)  小右 · 情感与关系小右：她似乎有点紧张。
+  #4 ✓  A=br(t0,h0)  B=br(t0,h0)  
+  #5 ✓  A=details(t0,h0)  B=details(t0,h0)  前额叶 · 合议与大纲前额叶：整体节奏放缓。
+  #6 ✓  A=br(t0,h0)  B=br(t0,h0)  
+  #7 ✓  A=details(t0,h0)  B=details(t0,h0)  小爱 · 欲望与身体小爱：想靠近。
+  #8 ✗  A=p(t0,h0)  B=br(t0,h0)  
+  #9 ✓  A=div(t0,h0)  B=div(t0,h0)  她的心里话（点击展开）她的心里话：别看我。
+  #10 ✓  A=p(t0,h0)  B=p(t0,h0)  月光淌进房间，她抬起眼。
+  #11 ✓  A=div(t0,h0)  B=div(t0,h0)  深夜 · 十一点
+  #12 ✗  A=div(t0,h0)  B=br(t0,h0)  — 约三分钟 —
+  #13 ✗  A=p(t0,h0)  B=div(t0,h0)  — 约三分钟 —
+  #14 ✗  A=details(t0,h0)  B=br(t0,h0)  变量更新{"好感度": "+1"}
+  #15 ✗  A=br(t0,h0)  B=details(t0,h0)  变量更新{"好感度": "+1"}
+  #16 ✗  A=p(t0,h0)  B=br(t0,h0)  
+  #17 ✓  A=ol(t0,h0)  B=ol(t0,h0)  走过去 - 坐到她身边 站在门口 - 先观察
+  可见文字一致 = true
+  B 残留标记 span = 0
+---- 消息 1 ： A 6 个顶层节点 / B 4 个 ----
+  #0 ✗  A=p(t0,h0)  B=details(t0,h0)  小左 · 记忆与逻辑前面还有一点正文。 小左
+  #1 ✗  A=details(t0,h0)  B=p(t0,h0)  小左 · 记忆与逻辑前面还有一点正文。 小左
+  #2 ✗  A=br(t0,h0)  B=details(t0,h0)  小右 · 情感与关系小右正常。
+  #3 ✗  A=details(t0,h0)  B=p(t0,h0)  后面还有正文。
+  #4 ✗  A=p(t0,h0)  B=-(tundefined,hundefined)  
+  #5 ✗  A=p(t0,h0)  B=-(tundefined,hundefined)  后面还有正文。
+  可见文字一致 = true
+  B 残留标记 span = 0
+
+===== C 栏（装配前：只有标记）HTML =====
+---- 消息 0 ----
+<p><span data-sm="thinking_left"></span><br>
+小左在这里推理。<br>
+第二行 <strong>加粗</strong> 与 <code>代码</code>。</p>
+<p>空行后的段落，还有 "引号" 和 链接<a href="http://a.b">文字</a>。<br>
+<span data-sm="/thinking_left"></span><br>
+<span data-sm="thinking_right"></span><br>
+小右：她似乎有点紧张。<br>
+<span data-sm="/thinking_right"></span><br>
+<span data-sm="thinking_director"></span><br>
+前额叶：整体节奏放缓。<br>
+<span data-sm="/thinking_director"></span><br>
+<span data-sm="thinking_love"></span><br>
+小爱：想靠近。<br>
+<span data-sm="/thinking_love"></span><br>
+<span data-sm="inner"></span><br>
+她的心里话：别看我。<br>
+<span data-sm="/inner"></span><br>
+<span data-sm="content"></span><br>
+月光淌进房间，她抬起眼。<br>
+<span data-sm="/content"></span><br>
+<span data-sm="time"></span><code>深夜 · 十一点</code><span data-sm="/time"></span><br>
+<span data-sm="elapsed"></span>约三分钟<span data-sm="/elapsed"></span><br>
+<span data-sm="UpdateVariable"></span><br>
+{"好感度": "+1"}<br>
+<span data-sm="/UpdateVariable"></span><br>
+</p>
+<ol>
+<li>走过去 - 坐到她身边</li>
+<li>站在门口 - 先观察</li>
+<li>关灯 - 让房间暗下来</li>
+<li>开口 - 轻声问她<br>
+</li>
+</ol>
+---- 消息 1 ----
+<p>前面还有一点正文。</p>
+<p>小左只有收尾标签。<br>
+<span data-sm="/thinking_left"></span><br>
+<span data-sm="thinking_right"></span><br>
+小右正常。<br>
+<span data-sm="/thinking_right"></span></p>
+<p>后面还有正文。</p>
+
+===== B 栏（新方案）HTML =====
+---- 消息 0 ----
+<p></p><details style="margin:6px 0;border-left:3px solid #5b9bd5;background:#5b9bd514;border-radius:0 8px 8px 0;" open=""><summary style="padding:7px 12px;cursor:pointer;color:#5b9bd5;font-size:13px;font-weight:500;">小左 · 记忆与逻辑</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;"><p>小左在这里推理。<br>
+第二行 <strong>加粗</strong> 与 <code>代码</code>。</p>
+<p>空行后的段落，还有 "引号" 和 链接<a href="http://a.b">文字</a>。</p></div></details><p><br>
+</p><details style="margin:6px 0;border-left:3px solid #d977a8;background:#d977a814;border-radius:0 8px 8px 0;" open=""><summary style="padding:7px 12px;cursor:pointer;color:#d977a8;font-size:13px;font-weight:500;">小右 · 情感与关系</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">小右：她似乎有点紧张。</div></details><br>
+<details style="margin:6px 0;border-left:3px solid #c9a227;background:#c9a22714;border-radius:0 8px 8px 0;" open=""><summary style="padding:7px 12px;cursor:pointer;color:#c9a227;font-size:13px;font-weight:500;">前额叶 · 合议与大纲</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">前额叶：整体节奏放缓。</div></details><br>
+<details style="margin:6px 0;border-left:3px solid #9b7fd4;background:#9b7fd414;border-radius:0 8px 8px 0;" open=""><summary style="padding:7px 12px;cursor:pointer;color:#9b7fd4;font-size:13px;font-weight:500;">小爱 · 欲望与身体</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">小爱：想靠近。</div></details><br>
+<div style="margin:6px 0;"><details style="border-left:2px solid #b08d57;background:#b08d5712;border-radius:0 6px 6px 0;padding:5px 12px;" open=""><summary style="cursor:pointer;color:#b08d57;font-size:12px;list-style:none;">她的心里话（点击展开）</summary><div style="margin-top:5px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">她的心里话：别看我。</div></details></div><p><br>
+月光淌进房间，她抬起眼。<br>
+</p><div style="margin:10px 0 16px;"><span style="display:inline-block;padding:6px 14px;background:#5b9bd514;border:0.5px solid #5b9bd559;border-radius:20px;font-size:12px;color:#5b9bd5;letter-spacing:0.4px;">深夜 · 十一点</span></div><br>
+<div style="margin:12px 0 0;text-align:right;font-size:12px;color:#9a8f6a;letter-spacing:0.3px;">— 约三分钟 —</div><br>
+<details style="margin:6px 0;border-left:3px solid #6b7280;background:#6b728012;border-radius:0 8px 8px 0;" open=""><summary style="cursor:pointer;padding:6px 12px;font-size:12px;color:#9aa3ad;letter-spacing:0.5px;list-style:none;outline:none;">变量更新</summary><div style="padding:6px 12px 10px;font-size:12.5px;line-height:1.75;white-space:pre-wrap;opacity:.7;">{"好感度": "+1"}</div></details><br>
+
+<ol>
+<li>走过去 - 坐到她身边</li>
+<li>站在门口 - 先观察</li>
+<li>关灯 - 让房间暗下来</li>
+<li>开口 - 轻声问她<br>
+</li>
+</ol>
+---- 消息 1 ----
+<details style="margin:6px 0;border-left:3px solid #5b9bd5;background:#5b9bd514;border-radius:0 8px 8px 0;" open=""><summary style="padding:7px 12px;cursor:pointer;color:#5b9bd5;font-size:13px;font-weight:500;">小左 · 记忆与逻辑</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;"><p>前面还有一点正文。</p>
+<p>小左只有收尾标签。</p></div></details><p><br>
+</p><details style="margin:6px 0;border-left:3px solid #d977a8;background:#d977a814;border-radius:0 8px 8px 0;" open=""><summary style="padding:7px 12px;cursor:pointer;color:#d977a8;font-size:13px;font-weight:500;">小右 · 情感与关系</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">小右正常。</div></details>
+<p>后面还有正文。</p>
+
+===== A 栏（现状）HTML =====
+---- 消息 0 ----
+<p></p><details style="margin:6px 0;border-left:3px solid #5b9bd5;background:#5b9bd514;border-radius:0 8px 8px 0;" open=""><summary style="padding:7px 12px;cursor:pointer;color:#5b9bd5;font-size:13px;font-weight:500;">小左 · 记忆与逻辑</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">小左在这里推理。<br>
+第二行 <strong>加粗</strong> 与 <code>代码</code>。<p></p>
+<p>空行后的段落，还有 "引号" 和 链接<a href="http://a.b">文字</a>。</p></div></details><br>
+<details style="margin:6px 0;border-left:3px solid #d977a8;background:#d977a814;border-radius:0 8px 8px 0;" open=""><summary style="padding:7px 12px;cursor:pointer;color:#d977a8;font-size:13px;font-weight:500;">小右 · 情感与关系</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">小右：她似乎有点紧张。</div></details><br>
+<details style="margin:6px 0;border-left:3px solid #c9a227;background:#c9a22714;border-radius:0 8px 8px 0;" open=""><summary style="padding:7px 12px;cursor:pointer;color:#c9a227;font-size:13px;font-weight:500;">前额叶 · 合议与大纲</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">前额叶：整体节奏放缓。</div></details><br>
+<details style="margin:6px 0;border-left:3px solid #9b7fd4;background:#9b7fd414;border-radius:0 8px 8px 0;" open=""><summary style="padding:7px 12px;cursor:pointer;color:#9b7fd4;font-size:13px;font-weight:500;">小爱 · 欲望与身体</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">小爱：想靠近。</div></details><p></p>
+<div style="margin:6px 0;"><details style="border-left:2px solid #b08d57;background:#b08d5712;border-radius:0 6px 6px 0;padding:5px 12px;" open=""><summary style="cursor:pointer;color:#b08d57;font-size:12px;list-style:none;">她的心里话（点击展开）</summary><div style="margin-top:5px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">她的心里话：别看我。</div></details></div>
+<p>月光淌进房间，她抬起眼。</p>
+<div style="margin:10px 0 16px;"><span style="display:inline-block;padding:6px 14px;background:#5b9bd514;border:0.5px solid #5b9bd559;border-radius:20px;font-size:12px;color:#5b9bd5;letter-spacing:0.4px;">深夜 · 十一点</span></div>
+<div style="margin:12px 0 0;text-align:right;font-size:12px;color:#9a8f6a;letter-spacing:0.3px;">— 约三分钟 —</div>
+<p></p><details style="margin:6px 0;border-left:3px solid #6b7280;background:#6b728012;border-radius:0 8px 8px 0;" open=""><summary style="cursor:pointer;padding:6px 12px;font-size:12px;color:#9aa3ad;letter-spacing:0.5px;list-style:none;outline:none;">变量更新</summary><div style="padding:6px 12px 10px;font-size:12.5px;line-height:1.75;white-space:pre-wrap;opacity:.7;">{"好感度": "+1"}</div></details><br>
+<p></p>
+<ol>
+<li>走过去 - 坐到她身边</li>
+<li>站在门口 - 先观察</li>
+<li>关灯 - 让房间暗下来</li>
+<li>开口 - 轻声问她<br>
+</li>
+</ol>
+---- 消息 1 ----
+<p></p><details style="margin:6px 0;border-left:3px solid #5b9bd5;background:#5b9bd514;border-radius:0 8px 8px 0;" open=""><summary style="padding:7px 12px;cursor:pointer;color:#5b9bd5;font-size:13px;font-weight:500;">小左 · 记忆与逻辑</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">前面还有一点正文。<p></p>
+<p>小左只有收尾标签。</p></div></details><br>
+<details style="margin:6px 0;border-left:3px solid #d977a8;background:#d977a814;border-radius:0 8px 8px 0;" open=""><summary style="padding:7px 12px;cursor:pointer;color:#d977a8;font-size:13px;font-weight:500;">小右 · 情感与关系</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">小右正常。</div></details><p></p>
+<p>后面还有正文。</p>
+
+===== 桩状态 =====
+装进酒馆正则的条目 = [{"name":"银月 · 美化标记（勿删）","find":"/<(\\/?)(thinking_left|thinking_right|thinking_love|thinking_director|inner|time|elapsed|content|UpdateVariable)>/g","replace":"<span data-sm=\"$1$2\"></span>","source":{"user_input":false,"ai_output":true,"slash_command":false,"world_info":false,"reasoning":false},"destination":{"display":true,"prompt":false}}]
+绑定事件 = ["CHAT_CHANGED","CHAT_LOADED","chatLoaded","MORE_MESSAGES_LOADED","MESSAGE_SWIPED","MESSAGE_EDITED","MESSAGE_DELETED","MESSAGE_UPDATED","MESSAGE_RECEIVED","CHARACTER_MESSAGE_RENDERED","GENERATION_STARTED","MESSAGE_SENT","STREAM_TOKEN_RECEIVED","GENERATION_ENDED","GENERATION_STOPPED"]
+
+===== 控制台 =====
+
+
+===== 断言 =====
+PASS  消息0 没有残留标记  <leftover=0>
+PASS  消息0 没有裸露的自定义标签文本
+PASS  消息0 可见文字与现状一致
+PASS  消息0 块外壳数量一致  <A=6 B=6>
+PASS  消息1 没有残留标记  <leftover=0>
+PASS  消息1 没有裸露的自定义标签文本
+PASS  消息1 可见文字与现状一致
+PASS  消息1 块外壳数量一致  <A=2 B=2>
+PASS  重复 scan 幂等

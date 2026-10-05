@@ -1,0 +1,105 @@
+target = 思维链\银月\silver-moon.js
+
+===== A0. 默认值：adoptLeadingThink 默认开，两条规则都装上 =====
+  闭合规则 = /^(?!\[metacognition\]\n)\s*(?:<think>|<thinking>|<thought>|<reasoning>|<analysis>|\[metacognition\]|<基础确认>|<思考>|\[思考\]|<思维链>)([\s\S]*?)(?:<\/think>|<\/thinking>|<\/thought>|<\/reasoning>|<\/analysis>|\[\/metacognition\]|<\/基础确认>|<\/思考>|\[\/思考\]|<\/思维链>)/s
+  流式规则 = /^(?!\[metacognition\]\n)\s*(?:<think>|<thinking>|<thought>|<reasoning>|<analysis>|\[metacognition\]|<基础确认>|<思考>|\[思考\]|<思维链>)([\s\S]*)$/s
+  替换 = "[metacognition]\n" + $1 + "\n</thinking>"
+  ST 生效的 reasoning = {"name":"DeepSeek","auto_parse":true,"prefix":"[metacognition]\n","suffix":"\n</thinking>","separator":"\n\n","add_to_prompts":false}
+
+===== A. 基线（手动关掉 adoptLeadingThink） =====
+
+===== B. 归一化（闭合）：恰好一个块，正文不留 wrapper =====
+
+===== C. 只做「消息开头」那一处 =====
+
+===== S. 流式：思维块必须跟着字长出来，不能等出完字 =====
+  每个 token 之后：
+    "<thi" → state=null 块内="" 正文="<thi"
+    "<think" → state=null 块内="" 正文="<think"
+    "<think>" → state=null 块内="" 正文="[metacognition]\n"
+    "<think>思" → state=thinking 块内="思" 正文=""
+    "<think>思考" → state=thinking 块内="思考" 正文=""
+    "<think>思考</think>" → state=thinking 块内="思考" 正文=""
+    "<think>思考</think>正" → state=thinking 块内="思考" 正文="正"
+    "<think>思考</think>正文" → state=thinking 块内="思考" 正文="正文"
+
+===== S10. 反证：normalizeWhileStreaming = false 就会退化成「出完字才渲染」 =====
+
+===== D. 别的正则在管同一批标签 → 让位；takeOver 才接管 =====
+  conflicts = [{"regex":"00-别人家的思维链","scope":"global","tag":"<think>"}]
+
+===== E. ST 不认这对 wrapper 时，坚决不装正则 =====
+
+===== F. prefix/suffix 是字面量：老写法的反斜杠是坏的（用 ST 自己的 escapeRegex 验） =====
+  escapeRegex("[metacognition]") = \[metacognition\]
+  escapeRegex("\\[metacognition\\]") = \\\[metacognition\\\]
+
+===== G. 消息已带 reasoning 时 ST 会跳过解析（这个坑要能被自检看见） =====
+  dom = {"messages":1,"reasoningBlocks":1,"messagesWithBlock":1,"wrapperLeftInBody":1,"bothInOneMessage":1}
+
+===== H. 空转与幂等（updateTavernRegexesWith 会重排整个聊天） =====
+
+===== 断言 =====
+PASS  脚本源码里没有 </script>（能安全内联）
+PASS  A0a 暴露了 __silverMoon
+PASS  A0b CONFIG.adoptLeadingThink 默认是 true
+PASS  A0c 两条规则都装上了  <["银月 · 思维链归一（勿删）","银月 · 思维链归一·流式（勿删）"]>
+PASS  A0d 顺序：闭合规则在前、流式规则在后（ST 按数组顺序跑）  <["银月 · 思维链归一（勿删）","银月 · 思维链归一·流式（勿删）"]>
+PASS  A0e 两条都落进「改消息本身」那一档（markdownOnly/promptOnly 都是 false）
+PASS  A0f 流式那条只换开标签、不补闭合标签  <"[metacognition]\n$1">
+PASS  A1 关掉后两条都摘掉  <[]>
+PASS  A2 状态 = off  <off>
+PASS  A3 <think> 没被解析（reasoning 为空）  <{}>
+PASS  A4 正文里还是原始文本  <"<think>\n小左推理\n</think>\n\n正文来了">
+PASS  A5 没有思维链块
+PASS  B1 探针通过  <{"ok":true,"reason":"ok","sample":"[metacognition]\nsm-probe-1791230284650\n</thinking>","parsed":{"reasoning":"sm-probe-1791230284650","content":""}}>
+PASS  B2 ST 那边的 prefix/suffix 被写成 canonical  <{"name":"DeepSeek","auto_parse":true,"prefix":"[metacognition]\n","suffix":"\n</thinking>","separator":"\n\n","add_to_prompts":false}>
+PASS  B3 CoT 进了 reasoning 块  <"小左推理">
+PASS  B4 正文里只剩正文（包裹被 ST 永久删掉）  <"正文来了">
+PASS  B5 恰好一个思维链块  <{"count":1,"state":"done","reasoning":"小左推理"}>
+PASS  B6 正文里 0 处残留 wrapper  <leak=0>
+PASS  B7 自检：没有「既有块又漏 wrapper」的消息  <{"messages":1,"reasoningBlocks":1,"messagesWithBlock":1,"wrapperLeftInBody":0,"bothInOneMessage":0}>
+PASS  B8 [metacognition]…</thinking> 也能被归一 + 解析  <"另一段CoT" / "第二段正文">
+PASS  B9 再跑一遍不会把 wrapper 叠起来（幂等）  <"[metacognition]\nx\n</thinking>y" vs "[metacognition]\nx\n</thinking>y">
+PASS  C1 正文中间的包裹不动  <"正文先来。<think>中间包裹</think>后面还有。">
+PASS  C2 内层块标签（thinking_left/right）不会被误吃  <"<thinking_left>小左</thinking_left><thinking_right>小右</thinking_right>">
+PASS  C3 不在开头的没闭合标签也不动  <"先有一段正文，然后 <think>没闭合">
+PASS  C4 这三条都没造出块
+PASS  S1 标签还没闭合时不乱来（前 3 个 token 没有块）  <[null,null,null]>
+PASS  S2 开标签一闭合、再出一个字就进「思考中」态（不是等出完字）  <[null,null,null,"thinking","thinking","thinking","thinking","thinking"]>
+PASS  S3 思考中的块里已经有正在写的字  <"思">
+PASS  S4 块跟着字变长  <"思" → "思考">
+PASS  S5 闭合标签到了就切回正文流  <{"state":"thinking","reasoning":"思考","mes":""}>
+PASS  S6 之后的正文继续正常流  <"正文">
+PASS  S7 收尾：恰好一个块、状态 done  <{"count":1,"state":"done","reasoning":"思考"}>
+PASS  S8 收尾后正文里也没有残留 wrapper
+PASS  S9 ST 那边持久化下来的 reasoning 干净（没有多出来的空行）  <{"reasoning":"思考","reasoning_type":"parsed"}>
+PASS  S10a 只剩闭合那一条  <["银月 · 思维链归一（勿删）"]>
+PASS  S10b 流式期间一直没有块（这就是你之前看到的现象）  <[null,null,null]>
+PASS  S10c 生成结束的那一刻才出现块  <{"count":1,"state":"thinking","reasoning":"思考"}>
+PASS  S10d 最终结果和开着流式那条时一致（只是慢了一整轮）  <{"mes":"正文","extra":{"reasoning":"思考","reasoning_type":"parsed"}}>
+PASS  D1 状态 = yielded  <"yielded">
+PASS  D2 让位时两条都没装  <["00-别人家的思维链"]>
+PASS  D3 冲突里能看到是谁在管哪个标签（而且不会把自己算成冲突）  <[{"regex":"00-别人家的思维链","scope":"global","tag":"<think>"}]>
+PASS  D4 让位时：外观归那条正则管  <"<div class=\"foreign\">CoT</div>正文">
+PASS  D5 让位时：银月没插一脚（没有思维块）
+PASS  D6 takeOver 后两条都装上了  <["银月 · 思维链归一（勿删）","银月 · 思维链归一·流式（勿删）"]>
+PASS  D7 takeOver 后状态 installed/present  <installed>
+PASS  D8 接管后：ST 解析成思维链  <"CoT">
+PASS  D9 接管后：恰好一个块  <{"count":1,"state":"done","reasoning":"CoT"}>
+PASS  D10 接管后：那条显示正则再也吃不到标签（不会两个）  <"正文">
+PASS  E1 状态 = probe-failed  <"probe-failed">
+PASS  E2 探针没过就不装正则  <[]>
+PASS  E3 报告里说明了原因  <ST 没把这对 wrapper 解析成 reasoning 块（prefix/suffix 现在生效的是什么？看 status().reasoning）>
+PASS  E4 探针用的是 canonical 那对  <"[metacognition]\nsm-probe-1791230284831\n</thinking>">
+PASS  E5 没装正则时正文原样（不会写进一串没人解析的 wrapper）  <"<think>CoT</think>正文">
+PASS  F1 字面量 prefix 能解析出内容  <{"reasoning":"内容","content":""}>
+PASS  F2 老写法（\[metacognition\]）解析不到 → 就是原来那个 bug  <{"reasoning":"","content":"[metacognition]\n内容\n</thinking>"}>
+PASS  G1 已带 reasoning → ST 跳过解析  <"模型自带的思维链">
+PASS  G2 于是刚写进去的 wrapper 留在正文里（坑确实存在）  <"[metacognition]\n文本里的CoT\n</thinking>正文">
+PASS  G3 自检报出「正文里漏了 wrapper」  <{"messages":1,"reasoningBlocks":1,"messagesWithBlock":1,"wrapperLeftInBody":1,"bothInOneMessage":1}>
+PASS  G4 自检报出「同一条消息既有块又漏 wrapper」  <{"messages":1,"reasoningBlocks":1,"messagesWithBlock":1,"wrapperLeftInBody":1,"bothInOneMessage":1}>
+PASS  H1 关着的时候不触发全聊天重排  <1 → 1>
+PASS  H2 反复 refresh 不会重复添加  <count=2>
+PASS  H3 重复 install 的状态是 present  <present>
+PASS  H4 uninstall 之后两条都摘干净了  <[]>

@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>银月 · 美化块 A/B 对照</title>
+<style>
+  :root { --fbg:#1f2228; --ftx:#d6dae0; --panel:#26292f; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:14px; background:#14161a; color:var(--ftx); font:14px/1.5 system-ui,"Segoe UI","Microsoft YaHei",sans-serif; }
+  h2 { font-size:13px; margin:0 0 8px; color:#9fb6d8; font-weight:600; letter-spacing:.4px; }
+  .wrap { display:flex; gap:14px; align-items:flex-start; }
+  .col { flex:1 1 0; min-width:0; background:var(--panel); border:1px solid #34383f; border-radius:10px; padding:10px; }
+  .chat { background:var(--fbg); border-radius:8px; padding:10px 12px; }
+  /* 下面这些是照 ST 的 style.css 抄的，尽量还原真实排版 */
+  .mes_text { font-weight:500; line-height:calc(1rem + .5rem); max-width:100%; overflow-wrap:anywhere; padding-top:5px; padding-bottom:5px; font-size:1rem; }
+  .mes_text p { margin-top:0; margin-bottom:10px; }
+  .mes_text p:last-child { margin-bottom:0; }
+  br { display:block; margin:2px 0; }
+  .mes_text a { color:#7fb2ff; }
+  .mes_text code { background:rgba(255,255,255,.08); padding:1px 4px; border-radius:4px; font-size:.92em; }
+  .mes_text pre { background:rgba(255,255,255,.06); padding:8px 10px; border-radius:6px; overflow:auto; }
+  .mes_text summary { list-style:none; }
+  .mes_text summary::-webkit-details-marker { display:none; }
+  #report { margin-top:14px; background:#101216; border:1px solid #34383f; border-radius:10px; padding:12px; white-space:pre-wrap; font:12px/1.5 ui-monospace,Consolas,monospace; color:#c8d0da; max-height:560px; overflow:auto; }
+  .mes { margin-bottom:10px; }
+</style>
+<script src="vendor/showdown.min.js"></script>
+<script src="vendor/purify.min.js"></script>
+<script>
+/* ============================================================
+   1) 酒馆环境桩：让银月脚本以为自己在 SillyTavern 里跑
+   ============================================================ */
+window.__stub = { regexInstalled: null, events: [], regexList: [] };
+function getScriptId() { return 'harness'; }
+function errorCatched(fn) { return function () { return fn.apply(this, arguments); }; }
+function eventOn(name, fn) { window.__stub.events.push(name); return { stop: function () {} }; }
+function eventMakeLast(name, fn) { return eventOn(name, fn); }
+var tavern_events = {};
+var toastr = { success: function (m) { console.log('[toastr:success]', m); }, warning: function (m) { console.log('[toastr:warning]', m); } };
+window.TavernHelper = {
+  getTavernRegexes: function () { return window.__stub.regexList || []; },
+  updateTavernRegexesWith: function (updater) {
+    var list = updater(window.__stub.regexList || []);
+    window.__stub.regexList = list;
+    window.__stub.regexInstalled = list;
+    return Promise.resolve(list);
+  },
+  getChatMessages: function () { return []; },
+};
+window.SillyTavern = { getContext: function () { return { extension_settings: {}, saveSettingsDebounced: function () {} }; } };
+var $ = function (fn) { if (typeof fn === 'function') fn(); return { on: function () {} }; };
+var SillyTavern = window.SillyTavern;
+
+/* ============================================================
+   2) 样本消息（raw 的 AI 输出文本）
+   ============================================================ */
+var SAMPLES = [
+  [
+    '<thinking_left>',
+    '小左在这里推理。',
+    '第二行 **加粗** 与 `代码`。',
+    '',
+    '空行后的段落，还有 "引号" 和 链接[文字](http://a.b)。',
+    '</thinking_left>',
+    '<thinking_right>',
+    '小右：她似乎有点紧张。',
+    '</thinking_right>',
+    '<thinking_director>',
+    '前额叶：整体节奏放缓。',
+    '</thinking_director>',
+    '<thinking_love>',
+    '小爱：想靠近。',
+    '</thinking_love>',
+    '<inner>',
+    '她的心里话：别看我。',
+    '</inner>',
+    '<content>',
+    '月光淌进房间，她抬起眼。',
+    '</content>',
+    '<time>`深夜 · 十一点`</time>',
+    '<elapsed>约三分钟</elapsed>',
+    '<UpdateVariable>',
+    '{"好感度": "+1"}',
+    '</UpdateVariable>',
+    '<choice>',
+    '1. 走过去 - 坐到她身边',
+    '2. 站在门口 - 先观察',
+    '3. 关灯 - 让房间暗下来',
+    '4. 开口 - 轻声问她',
+    '</choice>',
+  ].join('\n'),
+  [
+    '前面还有一点正文。',
+    '',
+    '小左只有收尾标签。',
+    '</thinking_left>',
+    '<thinking_right>',
+    '小右正常。',
+    '</thinking_right>',
+    '',
+    '后面还有正文。',
+  ].join('\n'),
+  // 第 3 条：照用户截图复刻（块内容是一个有序列表 + 嵌套项目符号）
+  [
+    '<thinking_left>',
+    '1. 上一轮结束时空：坦丁城旅店房间，夜晚，昏暗未点灯。鹿衔决明坐在床沿，希维刚从外面回来，抱住他，鹿衔决明刚说了"我没事"。',
+    '',
+    '2. 角色认知边界：',
+    '',
+    '   - 鹿衔决明（人类身份）：知道希维频繁外出见兽人，知道希维对瓦尔肯的倒贴，不知道希维密谋割肉棒，内心充满被背叛的酸涩与怀疑。',
+    '',
+    '   - 希维：处于第二阶段/逼婚与打马虎眼阶段。知道自己在接触瓦尔肯图谋割肉棒，知道自己对鹿衔决明的独占欲，绝对不知道瓦尔肯就是鹿衔决明。',
+    '',
+    '   - 本轮输入："你。有没有什么瞒着我的"由人类形态的鹿衔决明问出。',
+    '',
+    '3. 叫不叫小爱：否。本轮是日常情感对话与言语拉扯，无实质性亲密或性行为描写，不需要小爱。',
+    '</thinking_left>',
+    '<thinking_right>',
+    '小右：情感与关系的内容。',
+    '</thinking_right>',
+  ].join('\n'),
+];
+
+// 真实消息样本（由 jsdom-run 注进来；浏览器里也可用 ?sample=xx.txt 手动加载）
+if (window.__SAMPLE_EXTRA) SAMPLES.push(window.__SAMPLE_EXTRA);
+
+// 流式样本：把一条消息切在 thinking_right 里面，模拟「AI 还在写」
+var STREAM_BASE = String(window.__SAMPLE_EXTRA || SAMPLES[2] || '');
+var STREAM_CUT = STREAM_BASE.indexOf('</thinking_right>');
+if (STREAM_CUT > 0) {
+  SAMPLES.push(STREAM_BASE.slice(0, STREAM_CUT - 30));
+  window.__STREAM_INDEX = SAMPLES.length - 1;
+}
+
+function getChatMessages(id) {  var i = Number(id);
+  if (!Number.isFinite(i) || !SAMPLES[i]) return [];
+  return [{ message_id: i, message: SAMPLES[i], mes: SAMPLES[i], role: 'assistant' }];
+}
+
+// 让脚本能像在真酒馆里那样直读楼层文本（签名快路要用它）
+window.chat = SAMPLES.map(function (t) { return { mes: t }; });
+
+/* ============================================================
+   3) 复刻酒馆的显示流程：正则 → showdown → DOMPurify
+   ============================================================ */
+function makeConverter() {
+  return new showdown.Converter({
+    emoji: true,
+    literalMidWordUnderscores: true,
+    parseImgDimensions: true,
+    tables: true,
+    underline: true,
+    simpleLineBreaks: true,
+    strikethrough: true,
+    disableForced4SpacesIndentedSublists: true,
+  });
+}
+function parseRegex(str) {
+  var m = String(str).match(/^\/([\s\S]*)\/([a-z]*)$/);
+  if (!m) return new RegExp(str);
+  return new RegExp(m[1], m[2]);
+}
+function applyStRegex(text, findStr, replaceStr) {
+  var re = parseRegex(findStr);
+  return text.replace(re, function () {
+    var args = Array.prototype.slice.call(arguments);
+    var out = String(replaceStr).replace(/\{\{match\}\}/gi, '$0');
+    return out.replace(/\$(\d+)|\$<([^>]+)>/g, function (_, num, group) {
+      if (num) return args[Number(num)] === undefined ? '' : args[Number(num)];
+      var groups = args[args.length - 1];
+      return groups && typeof groups === 'object' && groups[group] ? groups[group] : '';
+    });
+  });
+}
+function sanitize(html) {
+  return DOMPurify.sanitize(html, { RETURN_DOM: false, RETURN_DOM_FRAGMENT: false, RETURN_TRUSTED_TYPE: false, ADD_TAGS: ['custom-style'] });
+}
+function renderThrough(text) {
+  return sanitize(makeConverter().makeHtml(text));
+}
+
+// 现状用的 9 条正则（01~08、12；09 与 10/10b/11 不动）
+var LEGACY = [
+  { name: '01-小左', find: '/(?:^|\\n)[ \\t]*(?:<thinking_left>\\s*)?((?:(?!<\\/?thinking_left>|<\\/?thinking_right>|<\\/?thinking_love>|<\\/?thinking_director>|<content>|<\\/content>|<time>|<\\/time>|<elapsed>|<\\/elapsed>|<choice>|<\\/choice>)[\\s\\S])+?)\\s*<\\/thinking_left>/g', replace: '<details style="margin:6px 0;border-left:3px solid #5b9bd5;background:#5b9bd514;border-radius:0 8px 8px 0;"><summary style="padding:7px 12px;cursor:pointer;color:#5b9bd5;font-size:13px;font-weight:500;">小左 · 记忆与逻辑</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">$1</div></details>' },
+  { name: '02-小右', find: '/<thinking_right>\\s*([\\s\\S]*?)\\s*<\\/thinking_right>/g', replace: '<details style="margin:6px 0;border-left:3px solid #d977a8;background:#d977a814;border-radius:0 8px 8px 0;"><summary style="padding:7px 12px;cursor:pointer;color:#d977a8;font-size:13px;font-weight:500;">小右 · 情感与关系</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">$1</div></details>' },
+  { name: '03-小爱', find: '/<thinking_love>\\s*([\\s\\S]*?)\\s*<\\/thinking_love>/g', replace: '<details style="margin:6px 0;border-left:3px solid #9b7fd4;background:#9b7fd414;border-radius:0 8px 8px 0;"><summary style="padding:7px 12px;cursor:pointer;color:#9b7fd4;font-size:13px;font-weight:500;">小爱 · 欲望与身体</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">$1</div></details>' },
+  { name: '04-前额叶', find: '/<thinking_director>\\s*([\\s\\S]*?)\\s*<\\/thinking_director>/g', replace: '<details style="margin:6px 0;border-left:3px solid #c9a227;background:#c9a22714;border-radius:0 8px 8px 0;"><summary style="padding:7px 12px;cursor:pointer;color:#c9a227;font-size:13px;font-weight:500;">前额叶 · 合议与大纲</summary><div style="padding:2px 12px 10px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">$1</div></details>' },
+  { name: '05-内心活动', find: '/<inner>\\s*([\\s\\S]*?)\\s*<\\/inner>/g', replace: '<div style="margin:6px 0;"><details style="border-left:2px solid #b08d57;background:#b08d5712;border-radius:0 6px 6px 0;padding:5px 12px;"><summary style="cursor:pointer;color:#b08d57;font-size:12px;list-style:none;">她的心里话（点击展开）</summary><div style="margin-top:5px;font-size:13px;line-height:1.75;white-space:pre-wrap;opacity:0.88;">$1</div></details></div>' },
+  { name: '06-时空栏', find: '/<time>\\s*`{0,3}\\s*([\\s\\S]*?)\\s*`{0,3}\\s*<\\/time>/g', replace: '<div style="margin:10px 0 16px;"><span style="display:inline-block;padding:6px 14px;background:#5b9bd514;border:0.5px solid #5b9bd559;border-radius:20px;font-size:12px;color:#5b9bd5;letter-spacing:0.4px;">$1</span></div>' },
+  { name: '07-时间结算', find: '/<elapsed>\\s*([\\s\\S]*?)\\s*<\\/elapsed>/g', replace: '<div style="margin:12px 0 0;text-align:right;font-size:12px;color:#9a8f6a;letter-spacing:0.3px;">— $1 —</div>' },
+  { name: '08-正文去壳', find: '/<content>\\s*([\\s\\S]*?)\\s*(?:<\\/content>|$)/g', replace: '$1' },
+  { name: '12-隐藏变量更新', find: '/<UpdateVariable>\\s*([\\s\\S]*?)\\s*<\\/UpdateVariable>/g', replace: '<details style="margin:6px 0;border-left:3px solid #6b7280;background:#6b728012;border-radius:0 8px 8px 0;"><summary style="cursor:pointer;padding:6px 12px;font-size:12px;color:#9aa3ad;letter-spacing:0.5px;list-style:none;outline:none;">变量更新</summary><div style="padding:6px 12px 10px;font-size:12.5px;line-height:1.75;white-space:pre-wrap;opacity:.7;">$1</div></details>' },
+];
+
+function legacyRender(raw) {
+  var out = raw;
+  LEGACY.forEach(function (r) { out = applyStRegex(out, r.find, r.replace); });
+  return renderThrough(out);
+}
+</script>
+</head>
+<body>
+  <div class="wrap">
+    <div class="col">
+      <h2>A · 现状（9 条酒馆正则 → showdown → DOMPurify）</h2>
+      <div class="chat" id="chat-a"></div>
+    </div>
+    <div class="col">
+      <h2>B · 新方案（标记正则 → showdown → DOMPurify → 银月脚本装配）</h2>
+      <div class="chat" id="chat"></div>
+    </div>
+    <div class="col">
+      <h2>C · 装配前（只有标记，没装配）</h2>
+      <div class="chat" id="chat-c"></div>
+    </div>
+  </div>
+  <pre id="report">跑起来了，等报告…</pre>
+  <pre id="perf">（还没测）</pre>
+
+  <script>
+  /* 变体切换：默认内联版；?variant=class 时加载类名版 */
+  (function () {
+    var name = /[?&]variant=class/.test(location.search) ? 'class' : 'inline';
+    document.write('<script src="../../思维链/银月/silver-moon-blocks-' + name + '.js"><\/script>');
+  })();
+  </script>
+  <script>
+  (function () {
+    var chatA = document.getElementById('chat-a');
+    var chatB = document.getElementById('chat');
+    var api = window.__silverMoonBlocksInline || window.__silverMoonBlocksClass;
+    var lines = [];
+
+    function buildPanels() {
+      if (!api) throw new Error('银月脚本没暴露调试接口 __silverMoonBlocksInline');
+      SAMPLES.forEach(function (raw, i) {
+        var mesA = document.createElement('div');
+        mesA.className = 'mes';
+        mesA.setAttribute('mesid', String(i));
+        var textA = document.createElement('div');
+        textA.className = 'mes_text';
+        textA.innerHTML = legacyRender(raw);
+        mesA.appendChild(textA);
+        chatA.appendChild(mesA);
+
+        var marked = applyStRegex(raw, api.markerRegex.find, api.markerRegex.replace);
+        var mesB = document.createElement('div');
+        mesB.className = 'mes';
+        mesB.setAttribute('mesid', String(i));
+        var textB = document.createElement('div');
+        textB.className = 'mes_text';
+        textB.setAttribute('data-marked', marked);
+        textB.innerHTML = renderThrough(marked);
+        mesB.appendChild(textB);
+        chatB.appendChild(mesB);
+
+        var mesC = document.createElement('div');
+        mesC.className = 'mes';
+        var textC = document.createElement('div');
+        textC.className = 'mes_text';
+        textC.innerHTML = renderThrough(marked);
+        mesC.appendChild(textC);
+        document.getElementById('chat-c').appendChild(mesC);
+      });
+      api.scan();
+    }
+
+    // 流式那一趟：把切了一半的消息重新渲染（恢复标记），再按「生成中」装配
+    function runStreamingTest() {
+      if (typeof window.__STREAM_INDEX !== 'number') return;
+      var idx = window.__STREAM_INDEX;
+      var sb = chatB.querySelector('.mes[mesid="' + idx + '"] .mes_text');
+      if (!sb) return;
+      // 真实场景里这会儿酒馆正处于「生成中」，后续扫描都会走流式那一趟；
+      // 这里也把状态摆成生成中，否则普通的定时扫描会把展开的块收起来。
+      try {
+        if (api.state) api.state.generating = true;
+      } catch (e) {}
+      sb.innerHTML = renderThrough(sb.getAttribute('data-marked') || '');
+      window.__streamCount = api.process(idx, { streaming: true });
+    }
+
+    // ---- 性能测量：80 层（jsdom 比真浏览器慢，看相对量级）----
+    async function runPerfTest() {
+      var N = 80;
+      var base = 100;
+      var i;
+      var chat = chatB;
+      var t0 = performance.now();
+      for (i = 0; i < N; i++) {
+        var mes = document.createElement('div');
+        mes.className = 'mes';
+        mes.setAttribute('mesid', String(base + i));
+        var text = document.createElement('div');
+        text.className = 'mes_text';
+        if (i % 2 === 0) {
+          text.innerHTML =
+            '<span data-sm="thinking_left"></span><br>小左：第 ' + i + ' 层推理，' + new Array(41).join('内容') + '。<br><span data-sm="/thinking_left"></span><br>' +
+            '<span data-sm="thinking_right"></span><br>小右：第 ' + i + ' 层，' + new Array(41).join('内容') + '。<br><span data-sm="/thinking_right"></span>';
+        } else {
+          text.innerHTML = new Array(61).join('普通正文第 ' + i + ' 层，用来撑长度。');
+        }
+        mes.appendChild(text);
+        chat.appendChild(mes);
+        window.chat[base + i] = { mes: text.textContent };
+      }
+      var buildMs = performance.now() - t0;
+
+      var t1 = performance.now();
+      api.scan();
+      // 全扫是分片的：记下第一片耗时，然后让出事件循环等所有分片跑完
+      var coldFirstChunkMs = performance.now() - t1;
+      var guard = 0;
+      while (api.state && api.state.scanTimer && guard < 200) {
+        await new Promise(function (r) { setTimeout(r, 5); });
+        guard += 1;
+      }
+      var coldMs = performance.now() - t1;
+
+      var t2 = performance.now();
+      api.scan();
+      var warmMs = performance.now() - t2;
+
+      var t3 = performance.now();
+      api.process(base + 1); // 普通楼层、内容没变 → 该被签名快路跳过
+      var skipPlainMs = performance.now() - t3;
+
+      var t4 = performance.now();
+      api.process(base); // 带块楼层、内容没变 → 也该跳过
+      var skipBlockMs = performance.now() - t4;
+
+      // 流式那一趟：把一层重新渲染（恢复标记）之后按「生成中」装一遍
+      var streamFloor = chat.querySelector('.mes[mesid="' + (base + 2) + '"] .mes_text');
+      var markedHtml = streamFloor.innerHTML;
+      var t5 = performance.now();
+      streamFloor.innerHTML = markedHtml;
+      api.process(base + 2, { streaming: true });
+      var streamPassMs = performance.now() - t5;
+
+      window.__perf = {
+        floors: N,
+        buildMs: +buildMs.toFixed(1),
+        coldFirstChunkMs: +coldFirstChunkMs.toFixed(1),
+        coldTotalMs: +coldMs.toFixed(1),
+        warmScanMs: +warmMs.toFixed(1),
+        onePlainFloorMs: +skipPlainMs.toFixed(2),
+        oneBlockFloorMs: +skipBlockMs.toFixed(2),
+        streamPassMs: +streamPassMs.toFixed(2),
+        totalFloors: document.querySelectorAll('#chat > .mes').length,
+      };
+      var el = document.getElementById('perf');
+      if (el) el.textContent = JSON.stringify(window.__perf);
+    }
+
+    // 「不闪」的机制验证：酒馆重排之后，块必须在下一次宏任务（可能伴随绘制）之前就装好。
+    // 这里拿「最后一层」来测（流式那一趟只处理最后一层），只放微任务跑，一个定时器都不许跑。
+    async function runSyncAssemblyTest() {
+      var lastMes = chatB.querySelector('.mes:last-child');
+      if (!lastMes) return;
+      var sb = lastMes.querySelector('.mes_text');
+      if (!sb) return;
+      var marked =
+        '<span data-sm="thinking_left"></span><br>小左这块写完了。<br><span data-sm="/thinking_left"></span><br>' +
+        '<span data-sm="thinking_right"></span><br>小右这块还在写……';
+      var mesid = Number(lastMes.getAttribute('mesid'));
+      if (Number.isFinite(mesid)) window.chat[mesid] = { mes: marked };
+      sb.innerHTML = renderThrough(marked); // 模拟酒馆重排
+      // 只让微任务跑（MutationObserver 回调就是微任务）
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise(function (r) { Promise.resolve().then(r); });
+      window.__syncTest = {
+        assembledBeforeTimer: sb.querySelectorAll('details').length > 0,
+        leftoverMarkers: sb.querySelectorAll('span[data-sm]').length,
+        openDetails: sb.querySelectorAll('details[open]').length,
+      };
+    }
+
+    function openAll(root) {      Array.prototype.forEach.call(root.querySelectorAll('details'), function (d) { d.open = true; });
+    }
+
+    function topLevel(container) {
+      var base = container.getBoundingClientRect().top;
+      var out = [];
+      Array.prototype.forEach.call(container.children, function (el) {
+        var r = el.getBoundingClientRect();
+        out.push({
+          tag: el.tagName.toLowerCase(),
+          top: Math.round(r.top - base),
+          h: Math.round(r.height),
+          w: Math.round(r.width),
+          text: String(el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 22),
+        });
+      });
+      return out;
+    }
+
+    function report() {
+      var aTexts = chatA.querySelectorAll('.mes_text');
+      var bTexts = chatB.querySelectorAll('.mes_text');
+      lines.push('===== 顶层节点结构/位置对照 =====');
+      Array.prototype.forEach.call(aTexts, function (a, i) {
+        var b = bTexts[i];
+        var ra = topLevel(a);
+        var rb = topLevel(b);
+        lines.push('---- 消息 ' + i + ' ： A ' + ra.length + ' 个顶层节点 / B ' + rb.length + ' 个 ----');
+        var n = Math.max(ra.length, rb.length);
+        for (var k = 0; k < n; k++) {
+          var x = ra[k] || {};
+          var y = rb[k] || {};
+          var ok = x.tag === y.tag && Math.abs((x.top || 0) - (y.top || 0)) <= 2 && Math.abs((x.h || 0) - (y.h || 0)) <= 3;
+          lines.push('  #' + k + (ok ? ' ✓ ' : ' ✗ ') + ' A=' + (x.tag || '-') + '(t' + x.top + ',h' + x.h + ')  B=' + (y.tag || '-') + '(t' + y.top + ',h' + y.h + ')  ' + (y.text || x.text || ''));
+        }
+        var sameText = String(a.textContent) === String(b.textContent);
+        lines.push('  可见文字一致 = ' + sameText);
+        if (!sameText) {
+          lines.push('   A: ' + JSON.stringify(String(a.textContent)));
+          lines.push('   B: ' + JSON.stringify(String(b.textContent)));
+        }
+        lines.push('  B 残留标记 span = ' + b.querySelectorAll('span[data-sm]').length);
+      });
+      lines.push('');
+      lines.push('===== C 栏（装配前：只有标记）HTML =====');
+      Array.prototype.forEach.call(document.querySelectorAll('#chat-c .mes_text'), function (c, i) {
+        lines.push('---- 消息 ' + i + ' ----');
+        lines.push(c.innerHTML);
+      });
+      lines.push('');
+      lines.push('===== B 栏（新方案）HTML =====');
+      Array.prototype.forEach.call(bTexts, function (b, i) {
+        lines.push('---- 消息 ' + i + ' ----');
+        lines.push(b.innerHTML);
+      });
+      lines.push('');
+      lines.push('===== A 栏（现状）HTML =====');
+      Array.prototype.forEach.call(aTexts, function (a, i) {
+        lines.push('---- 消息 ' + i + ' ----');
+        lines.push(a.innerHTML);
+      });
+      lines.push('');
+      if (api && api.css) {
+        lines.push('===== 变体 B 注入的 CSS =====');
+        lines.push(api.css);
+        lines.push('');
+      }
+      lines.push('');
+      lines.push('===== 流式装配（切在 thinking_right 里面，模拟还在生成）=====');
+      if (typeof window.__STREAM_INDEX === 'number') {
+        var sb2 = chatB.querySelector('.mes[mesid="' + window.__STREAM_INDEX + '"] .mes_text');
+        lines.push('装配块数 = ' + window.__streamCount);
+        lines.push('残留标记 span = ' + (sb2 ? sb2.querySelectorAll('span[data-sm]').length : -1));
+        lines.push('展开中的 details = ' + (sb2 ? sb2.querySelectorAll('details[open]').length : -1));
+        lines.push('第一层节点 = ' + (sb2 ? Array.prototype.map.call(sb2.children, function (el) { return el.tagName.toLowerCase(); }).join(', ') : '-'));
+        lines.push(sb2 ? sb2.innerHTML : '(没有)');
+      } else {
+        lines.push('(没有流式样本)');
+      }
+      lines.push('');
+      lines.push('===== 桩状态 =====');      lines.push('装进酒馆正则的条目 = ' + JSON.stringify((window.__stub.regexInstalled || []).map(function (r) {
+        return { name: r.script_name, find: r.find_regex, replace: r.replace_string, source: r.source, destination: r.destination };
+      })));
+      lines.push('绑定事件 = ' + JSON.stringify(window.__stub.events));
+      document.getElementById('report').textContent = lines.join('\n');
+      window.__harnessDone = true;
+    }
+
+    try {
+      buildPanels();
+      openAll(chatA);
+      openAll(chatB);
+      setTimeout(function () {
+        openAll(chatA);
+        openAll(chatB);
+        report();
+        // 顺序有讲究：先跑性能测试（里面会全扫，全扫会把流式展开态收起来），
+        // 再做「生成中」的装配与「不闪」验证。
+        runPerfTest()
+          .then(runStreamingTest)
+          .then(runSyncAssemblyTest);
+      }, 120);
+    } catch (err) {
+      document.getElementById('report').textContent = '异常：' + (err && err.stack ? err.stack : err);
+      window.__harnessDone = true;
+    }
+  })();
+  </script>
+</body>
+</html>

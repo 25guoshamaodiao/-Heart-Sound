@@ -1,0 +1,1 @@
+﻿{ "name": "repro", "private": true, "dependencies": { "dsh-better-sidebar": "0.18.0" } }
