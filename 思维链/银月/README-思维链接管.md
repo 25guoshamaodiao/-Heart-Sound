@@ -148,6 +148,39 @@ CONFIG.normalizeWhileStreaming = true    // 默认；false = 回到「出完字�
 * **别人的显示正则也吃不到标签了**（D10：接管后对方那条正则一个产物都没有）；
 * 让位判定不靠顺序（D1-D5）。
 
+### 让位必须「让干净」——别只让一半（v1.3 修的就是这个）
+
+**这是拿你真实预设 + 那条真实消息（`[metacognition]` + `<dream_plot>`）跑出来的事故：**
+
+你的预设 `梦鲸思客V4-0902` 自己用 `<think>` 管思维链，里面有三条正则在动它：
+
+```
+[🥷隐藏]思考正则格式化        md=0 pr=0  find: ^(?!<think>)([\s\S]*\S[\s\S]*)(?:</think>|(<dream_plot>)(?=\r?\n))
+                                          replace: <think>\n$1\n</think>\n$2
+[🦋美化]思考正则隐藏 - 二选一  md=1 pr=0  find: /<think>([\s\S]*)<\/think>/i     replace:（空 = 显示时藏掉）
+[🥷隐藏]删除额外标签          md=1 pr=0
+```
+
+v1.2 的行为是：银月**认出了冲突、正确地让位**（不装自己的正则），
+**但 `injectConfig` 早就把 ST 的 `reasoning.prefix/suffix/auto_parse` 改成 canonical 了**。
+于是流式时 `[4]` 还没触发（它的 find 要等收尾），正文仍以 `[metacognition]` 开头
+→ **ST 的原生解析自己上了**：思维块一路 thinking，1318 字的思维链被从 `mes` 里搬走，
+`mes` 从 2570 字缩到 1223 字、开头变成 `</think>\n\n</think>\n<dream_plot>…`，
+你预设的 `<think>` 包装链（格式化 → 隐藏 → 提示词侧隐藏）全部落空。
+
+修法：**铺配置挪到守卫之后**（`applyCanonicalConfig()`），任何一步不过都调
+`revertOwnReasoningConfig()` 把配置原样还回去。现在这条消息的结果是：
+
+| | 默认（接管开着） | `takeOver()` 之后 |
+|---|---|---|
+| 状态 | `yielded`，`configApplied=false` | `installed`，`configApplied=true` |
+| ST 配置 | `<think>\n` / `\n</think>` / auto_parse=false（原样） | `[metacognition]` / `</thinking>` / true |
+| 流式思维块 | 没有 | 一路 thinking |
+| `mes` | **2570 字，和接管关着时逐字一致** | 1223 字（思维链被搬进 `extra.reasoning`） |
+
+这就是 `.work/dream-check2.js` 那 12 条断言钉住的东西（R4 是核心那条）。
+想确认你现在是哪种状态：`__silverMoon.status().normalize.configApplied`。
+
 ### 唯一剩下的坑（自检能报出来）
 
 消息**已经带了 reasoning 字段**时，ST 会**跳过解析**（`reasoning.js:1311-1314`），
@@ -170,15 +203,18 @@ __silverMoon.refresh()       // 改完 CONFIG 调用，立即重新同步
 
 `normalize.state`：`off` / `no-wrappers` / `probe-failed`（ST 不认这对 wrapper，**没装**）/
 `yielded`（有冲突，让位）/ `installed` · `present`（装好了）。
+`normalize.configApplied`：银月现在有没有占着 ST 的 reasoning 配置 ——
+`yielded` / `probe-failed` / `off` 时它必须是 `false`（配置已还回去）。
 
 ---
 
-## 5. 三道守卫
+## 5. 四道守卫
 
 | 守卫 | 防的是什么 | 自检台 |
 |---|---|---|
 | **探针**（用 ST 自己的 `parseReasoningFromString` 试一遍） | 我们写进去的 wrapper 真会被解析掉吗？不过就**坚决不装**，否则等于往正文里写一串没人认的 wrapper | E1-E5 |
 | **让位**（`yieldToOtherRegexes`） | 别的启用正则在管同一批标签时不抢 | D1-D5 + `.work/live-conflict-check.js` |
+| **让位要连配置一起还**（`revertOwnReasoningConfig`） | 只让一半：正则没装、ST 的 reasoning 配置却被改了 → ST 自己去搬思维链、预设的包装链还在 → 正文和聊天记录被改坏 | R4-R8（真实预设 + 真实消息） |
 | **DOM 自检** | 事后可观测：有没有消息既出现块、又漏了 wrapper | G3/G4 |
 
 另外两道**幂等**保护（都是自检台抓出来才补上的）：
@@ -195,8 +231,12 @@ __silverMoon.refresh()       // 改完 CONFIG 调用，立即重新同步
 互不干扰，可以同时装：银月的两条只管**消息开头、整段 CoT 那个外层包裹**；
 美化块的标记正则管 `<thinking_left>`、`<thinking_right>` 这些**内层块**。
 
-拿你机器上真实生效的 7 条正则跑过（`.work/live-conflict-check.js`，只读）：
-**不会误判冲突**，`adoptLeadingThink` 会直接接管。
+拿你机器上真实生效的 7 条全局正则跑过（`.work/live-conflict-check.js`，只读）：
+**不会误判冲突**。
+
+但**预设层**要另说：你现在用的 `梦鲸思客V4-0902` 自带那三条 `<think>` 正则 →
+银月**会让位**（`configApplied=false`，什么都不动），这是正确结果 ——
+那个预设自己就把思维链藏好了，月亮块用不上；要强行接管才 `takeOver()`（代价见第 3 节表）。
 
 > ⚠️ 观察点：如果某个预设把**内层块一起包在一个外层 `<think>` 里**，整段 CoT
 >（连同内层字面标签）会被抽进月亮块，而美化块脚本的标记正则作用范围是"AI 输出"，
@@ -208,9 +248,14 @@ __silverMoon.refresh()       // 改完 CONFIG 调用，立即重新同步
 ## 7. 自检台
 
 ```powershell
-node .work\st-reasoning-test.js        # 63 条断言，报告写到 .work\st-reasoning-report.txt
+node .work\st-reasoning-test.js        # 68 条断言（合成样本），报告写到 .work\st-reasoning-report.txt
+node .work\dream-check2.js             # 12 条断言（你真实的预设 + 真实消息），报告写到 .work\dream-report.txt
 node .work\live-conflict-check.js      # 拿你真实的正则列表查冲突（只读，不回写）
 ```
+
+jsdom 装在 `.work\node_modules`（DSH 每次命令的 `TEMP` 都是新的随机目录，
+所以不能用 `%TEMP%`；`.work/jsdom-loader.js` 会按优先级去找）。
+`.work` 是临时目录，看完可以整个删掉。
 
 `.work/ref/st-mirror.js` 是从 ST 1.14.0 源码逐字搬来的迷你 ST：
 `escapeRegex` / `parseReasoningFromString` / `getRegexedString` / `cleanUpMessage` 那一趟 /
@@ -233,6 +278,12 @@ node .work\live-conflict-check.js      # 拿你真实的正则列表查冲突（
 
 ## 9. 更新记录
 
+* **v1.3**
+  * **修「让位只让了一半」**：铺 `reasoning` 配置挪到探针/冲突检查**之后**
+    （`applyCanonicalConfig`），让位或探针失败时调 `revertOwnReasoningConfig` 原样还回去。
+    这条是拿你真实的 `梦鲸思客V4-0902` + 真实 `<dream_plot>` 消息跑出来的事故（见第 3 节）。
+  * `status().normalize.configApplied` 让你一眼看出银月有没有占着配置。
+  * 新增真实数据回归 `.work/dream-check2.js`（12 条）。
 * **v1.2**
   * 默认打开接管（`adoptLeadingThink: true`）。
   * **修流式**：补一条「只换开标签」的正则，思维块从第一个 token 起就跟着长

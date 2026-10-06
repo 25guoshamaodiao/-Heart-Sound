@@ -5,7 +5,28 @@ const fs = require('fs');
 
 const SETTINGS = 'E:\\sillydata\\default-user\\settings.json';
 const j = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
-const list = j.extension_settings.regex || [];
+const list = (j.extension_settings.regex || []).slice();
+
+// 预设层也要算：ST 的 getRegexedString 是把 全局 → 预设 → 角色卡 串起来跑的
+// （engine.js:11-16,43-45）。不带预设层，结论会正好反过来。
+const PRESET_DIR = 'E:\\sillydata\\default-user\\OpenAI Settings';
+let presetName = '(没找到)';
+try {
+  const newest = fs
+    .readdirSync(PRESET_DIR)
+    .filter((f) => f.endsWith('.json'))
+    .map((f) => ({ f: f, t: fs.statSync(PRESET_DIR + '\\' + f).mtimeMs }))
+    .sort((a, b) => b.t - a.t)[0];
+  if (newest) {
+    presetName = newest.f;
+    const preset = JSON.parse(fs.readFileSync(PRESET_DIR + '\\' + newest.f, 'utf8'));
+    const rs = (preset.extensions && preset.extensions.regex_scripts) || [];
+    for (const r of rs) list.push(Object.assign({}, r, { _scope: 'preset' }));
+  }
+} catch (e) {
+  console.log('（预设层没读成：' + e.message + '）');
+}
+console.log('最近改动的预设 =', presetName, '（预设正则', list.length, '条计入）');
 
 // —— 这一段和 silver-moon.js 里的 collectForeignRegexes / wrapperCores / regexHitsWrapper 等价 ——
 const WRAPPERS = [

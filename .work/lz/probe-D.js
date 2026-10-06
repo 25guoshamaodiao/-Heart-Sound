@@ -1,0 +1,12 @@
+'use strict';
+const P = require('./pipeline');
+const s = '```html\n<!doctype html>\n<html><head><style>:root{--x:#fff}</style></head><body><div>hi</div></body></html>\n```';
+const h = P.messageFormatting(s, { scripts: [] });
+console.log('FULL:', JSON.stringify(h.slice(0, 300)));
+const box = P.win.document.createElement('div');
+box.innerHTML = h;
+const pre = box.querySelector('pre');
+console.log('pre 存在:', !!pre, '| 父节点:', pre ? pre.parentElement.tagName : '-');
+console.log('选择器 .mes_text pre 命中数:', box.querySelectorAll('pre').length);
+console.log('顶层节点序列:', [...box.children].map((e) => e.tagName).join(','));
+console.log('文本框内容开头:', JSON.stringify((box.textContent || '').slice(0, 120)));

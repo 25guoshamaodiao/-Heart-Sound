@@ -9,7 +9,8 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { JSDOM, VirtualConsole } = require(path.join(process.env.TEMP, 'sm-harness', 'node_modules', 'jsdom'));
+const { loadJsdom } = require('./jsdom-loader');
+const { JSDOM, VirtualConsole } = loadJsdom(path.join(__dirname, '..'));
 
 const ROOT = process.cwd();
 const TARGET = path.join(ROOT, '思维链', '银月', 'silver-moon.js');
@@ -63,6 +64,11 @@ async function makeEnv() {
 const ourRegexes = (win) =>
   (win.__mirror.getGlobalRegexes() || []).filter((r) => r.scriptName === NAME_CLOSED || r.scriptName === NAME_STREAM);
 const hasNormalize = (win) => ourRegexes(win).length > 0;
+// ST 那边的初始配置（镜像里就是 ST 默认值）——「让位时有没有还回去」用它比
+const isDefaultReasoning = (win) => {
+  const r = win.__mirror.power_user.reasoning;
+  return r.prefix === '<think>\n' && r.suffix === '\n</think>' && r.auto_parse === false;
+};
 const blockInfo = (win, idx) => {
   const el = win.document.querySelector('#chat .mes[mesid="' + idx + '"] .mes_reasoning_details');
   if (!el) return { count: 0, state: null, reasoning: '' };
@@ -126,7 +132,9 @@ function leakCount(win, prefix, suffix) {
     api.config.adoptLeadingThink = false;
     await api.refresh();
     check('A1 关掉后两条都摘掉', !hasNormalize(win), JSON.stringify(ourRegexes(win).map((r) => r.scriptName)));
-    check('A2 状态 = off', api.status().normalize.state === 'off', api.status().normalize.state);
+    check('A2 状态 = off，且把 ST 的 reasoning 配置还回去了（不留半吊子状态）',
+      api.status().normalize.state === 'off' && api.status().normalize.configApplied === false && isDefaultReasoning(win),
+      JSON.stringify(api.status().reasoning));
     const m = win.__mirror.receive(0, '<think>\n小左推理\n</think>\n\n正文来了');
     check('A3 <think> 没被解析（reasoning 为空）', !m.extra.reasoning, JSON.stringify(m.extra));
     check('A4 正文里还是原始文本', m.mes.indexOf('<think>') === 0, JSON.stringify(m.mes));
@@ -145,6 +153,7 @@ function leakCount(win, prefix, suffix) {
     check('B2 ST 那边的 prefix/suffix 被写成 canonical',
       !!st.reasoning && st.reasoning.prefix === api.config.canonicalPrefix && st.reasoning.auto_parse === true,
       JSON.stringify(st.reasoning));
+    check('B2b 接管成功时 configApplied = true（是它占着配置）', st.normalize.configApplied === true);
 
     const m = win.__mirror.receive(0, '<think>\n小左推理\n</think>\n\n正文来了');
     check('B3 CoT 进了 reasoning 块', String(m.extra.reasoning || '').indexOf('小左推理') !== -1, JSON.stringify(m.extra.reasoning));
@@ -259,17 +268,32 @@ function leakCount(win, prefix, suffix) {
     lines.push('  conflicts = ' + JSON.stringify(st.conflicts));
     check('D1 状态 = yielded', st.normalize.state === 'yielded', JSON.stringify(st.normalize.state));
     check('D2 让位时两条都没装', !hasNormalize(win), JSON.stringify(win.__mirror.getGlobalRegexes().map((r) => r.scriptName)));
+    check('D2b 让位时必须把 ST 的 reasoning 配置还回去（v1.3 修的 bug）',
+      st.normalize.configApplied === false && isDefaultReasoning(win), JSON.stringify(st.reasoning));
     check('D3 冲突里能看到是谁在管哪个标签（而且不会把自己算成冲突）',
       st.conflicts.some((c) => c.regex === '00-别人家的思维链' && c.tag === '<think>') &&
         st.conflicts.every((c) => c.regex !== NAME_CLOSED && c.regex !== NAME_STREAM), JSON.stringify(st.conflicts));
     const m = win.__mirror.receive(0, '<think>CoT</think>正文');
     check('D4 让位时：外观归那条正则管', mesText(win, 0).indexOf('foreign') !== -1, JSON.stringify(mesText(win, 0)));
     check('D5 让位时：银月没插一脚（没有思维块）', blockInfo(win, 0).count === 0);
+    {
+      // 让位状态下流式跑一条 <think> 包裹的消息：ST 不该把思维链从 mes 里搬走。
+      // （真实消息 <dream_plot> 那条踩的就是这个坑：让位了但配置被改了一半。）
+      const s = win.__mirror.beginStream(1);
+      s.apply('<think>思考中', false);
+      s.apply('<think>思考中</think>正文', false);
+      s.finish();
+      const mes1 = (win.__mirror.chat[1] && win.__mirror.chat[1].mes) || '';
+      check('D5b 让位时流式也不搬思维链（正文原封不动）',
+        blockInfo(win, 1).count === 0 && mes1.indexOf('<think>') !== -1, JSON.stringify(mes1));
+    }
 
     await api.takeOver();
     st = api.status();
     check('D6 takeOver 后两条都装上了', ourRegexes(win).length === 2, JSON.stringify(ourRegexes(win).map((r) => r.scriptName)));
     check('D7 takeOver 后状态 installed/present', ['installed', 'present'].includes(st.normalize.state), st.normalize.state);
+    check('D7b takeOver 之后才占住配置', st.normalize.configApplied === true && st.reasoning.prefix === api.config.canonicalPrefix,
+      JSON.stringify(st.reasoning));
     win.__mirror.resetChat();
     const m2 = win.__mirror.receive(0, '<think>CoT</think>正文');
     check('D8 接管后：ST 解析成思维链', String(m2.extra.reasoning || '').indexOf('CoT') !== -1, JSON.stringify(m2.extra.reasoning));
@@ -290,6 +314,7 @@ function leakCount(win, prefix, suffix) {
     const st = api.status();
     check('E1 状态 = probe-failed', st.normalize.state === 'probe-failed', JSON.stringify(st.normalize.state));
     check('E2 探针没过就不装正则', !hasNormalize(win), JSON.stringify(ourRegexes(win).map((r) => r.scriptName)));
+    check('E2b 探针没过也要把配置还回去', st.normalize.configApplied === false && isDefaultReasoning(win), JSON.stringify(st.reasoning));
     check('E3 报告里说明了原因', typeof st.normalize.note === 'string' && st.normalize.note.length > 0, st.normalize.note);
     check('E4 探针用的是 canonical 那对', String(st.normalize.probe.sample || '').indexOf(api.config.canonicalPrefix) === 0,
       JSON.stringify(st.normalize.probe.sample));

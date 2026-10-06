@@ -1,0 +1,28 @@
+preset = E:/sillydata/default-user/OpenAI Settings/梦鲸思客V4-0902.json
+preset regexes = 27 条
+message = 2552 字
+
+  参照：mes 2570 字，开头 <think>⏎[metacognition]⏎⏎一、检设定：⏎  A. 提取并分析所有可能与剧情有…
+
+  默认（接管开着）：state=yielded  configApplied=false
+  冲突：[🥷隐藏]思考正则格式化(<think>) , [🦋美化]思考正则隐藏 - 二选一(<think>) , [🥷隐藏]删除额外标签(<think>)
+  默认结果：流式块状态 --------------------------------，mes 2570 字，reasoning 0 字
+
+  takeOver 之后：state=installed  configApplied=true
+    mes 1223 字，开头 </think>⏎⏎</think>⏎<dream_plot>⏎<dream_body>⏎<dream_scene>⏎<…
+    搬进 reasoning 的思维链 1318 字
+    流式块状态 thinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinkingthinking
+
+===== 断言 =====
+PASS  R0 关了接管时，银月自己不占 ST 的 reasoning 配置  <{"name":"DeepSeek","auto_parse":false,"prefix":"<think>\n","suffix":"\n</think>","separator":"\n\n","add_to_prompts":false}>
+PASS  R0b 关了接管时流式不产生思维块  <-------------------------------->
+PASS  R1 认得出预设那几条在管 <think>  <[{"regex":"[🥷隐藏]思考正则格式化","scope":"preset","tag":"<think>"},{"regex":"[🦋美化]思考正则隐藏 - 二选一","scope":"preset","tag":"<think>"},{"regex":"[🥷隐藏]删除额外标签","scope":"preset","tag":"<think>"}]>
+PASS  R2 状态 = yielded  <yielded>
+PASS  R3 让位时两条正则都没装  <[]>
+PASS  R4 ★ 让位时把 ST 的 reasoning 配置原样还回去（v1.3 修的 bug）  <{"name":"DeepSeek","auto_parse":false,"prefix":"<think>\n","suffix":"\n</think>","separator":"\n\n","add_to_prompts":false}>
+PASS  R5 让位时流式不产生思维块  <-------------------------------->
+PASS  R6 让位时思维链没被从 mes 里搬走  <reasoning=0>
+PASS  R7 让位时 mes 与参照组一致（正文/记录都没被动）  <2570 vs 2570>
+PASS  R8 mes 里仍然留着预设自己的 <think> 包装
+PASS  R9 takeOver 后确实接管了（配置被占住 + 思维链被搬走）  <configApplied=true reasoning=1318>
+PASS  R10 代价可见：mes 变短了（思维链不在正文里了）  <1223 < 2570 ?>

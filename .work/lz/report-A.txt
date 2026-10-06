@@ -1,0 +1,38 @@
+==============================================================
+A. 生成结束：整条消息走完 cleanUpMessage + messageFormatting
+==============================================================
+cleanUpMessage 后长度: 330（原 330）
+--- cleanUpMessage 产物前 200 字 ---
+<UpdateVariable> <Analysis> 本轮：路明非在图书馆遇到诺诺，情绪从躲闪转为承认。好感度 +1，诺诺警觉度 +1。 </Analysis> <JSONPatch> [{"op":"replace","path":"/角色/路明非/好感度","value":2}] </JSONPatch> </UpdateVariable> <content> <scene location
+
+messageFormatting 产物长度: 187751
+  DOM: 元素 44 个 / <pre> 3 / <code> 1 / <iframe> 0
+  龙族模板根节点命中数 (data-lz-content|data-lzvr-root|data-lz-source): 1
+  产物开头: <div data-lzvr-root="" data-lzvr-state="complete" style="width:min(100%,46rem);margin:clamp(0.9rem,3vw,1.45rem) auto;box-sizing:border-box;"> <details data-lzvr-card=""> <summary data-lzvr-summary="">
+  可见文字开头:  NØRMA · ARCHIVE RECONCILIATION 变量档案已封存 本轮状态变更已生成可审计记录 SEALED / 01 01 本轮变更摘要CHANGE ABSTRACT 本轮：路明非在图书馆遇到诺诺，情绪从躲闪转为承认。好感度 +1，诺诺警觉度 +1。 02 查看原始补丁RAW JSON PATCH [{"op":"replace","path":"/角色/路明非/好感度","value":2}] ARCHIVE · LZ/MVU INTEGRITY SEALED Δ RECORD / 01 :whe
+
+==============================================================
+B. 流式：每个 token 重跑一遍（ST 就是这么干的）
+==============================================================
+  raw=   8  lz壳=0  pre=0  文字="<UpdateV"
+  raw=  16  lz壳=1  pre=0  文字="NØRMA · VARIABLE RECONCILIATION 状态演算中 正在核对本轮可持"
+  raw=  24  lz壳=1  pre=0  文字="NØRMA · VARIABLE RECONCILIATION 状态演算中 正在核对本轮可持"
+  raw=  32  lz壳=1  pre=0  文字="NØRMA · VARIABLE RECONCILIATION 状态演算中 正在核对本轮可持"
+  raw=  40  lz壳=1  pre=0  文字="NØRMA · VARIABLE RECONCILIATION 状态演算中 正在核对本轮可持"
+  raw=  48  lz壳=1  pre=0  文字="NØRMA · VARIABLE RECONCILIATION 状态演算中 正在核对本轮可持"
+  raw=  56  lz壳=1  pre=0  文字="NØRMA · VARIABLE RECONCILIATION 状态演算中 正在核对本轮可持"
+  raw=  64  lz壳=1  pre=0  文字="NØRMA · VARIABLE RECONCILIATION 状态演算中 正在核对本轮可持"
+  raw=  72  lz壳=1  pre=0  文字="NØRMA · VARIABLE RECONCILIATION 状态演算中 正在核对本轮可持"
+  raw=  80  lz壳=1  pre=0  文字="NØRMA · VARIABLE RECONCILIATION 状态演算中 正在核对本轮可持"
+  raw=  88  lz壳=1  pre=0  文字="NØRMA · VARIABLE RECONCILIATION 状态演算中 正在核对本轮可持"
+  raw=  96  lz壳=1  pre=0  文字="NØRMA · VARIABLE RECONCILIATION 状态演算中 正在核对本轮可持"
+  raw= 104  lz壳=1  pre=0  文字="NØRMA · VARIABLE RECONCILIATION 状态演算中 正在核对本轮可持"
+  raw= 112  lz壳=1  pre=0  文字="NØRMA · VARIABLE RECONCILIATION 状态演算中 正在核对本轮可持"
+  raw= 312  lz壳=1  pre=2  文字="NØRMA · ARCHIVE RECONCILIATION 变量档案已封存 本轮状态变更已"
+  raw= 320  lz壳=1  pre=2  文字="NØRMA · ARCHIVE RECONCILIATION 变量档案已封存 本轮状态变更已"
+  raw= 328  lz壳=1  pre=2  文字="NØRMA · ARCHIVE RECONCILIATION 变量档案已封存 本轮状态变更已"
+  raw= 330  lz壳=1  pre=3  文字="NØRMA · ARCHIVE RECONCILIATION 变量档案已封存 本轮状态变更已"
+
+>>> 第一次出现"龙族模板壳"的位置: raw 长度 16 / 330
+>>> 第一次在正文里看到 <content> 内文的位置: raw 长度 176
+>>> <content> 闭合标签出现在 raw 长度: 330

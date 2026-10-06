@@ -1,0 +1,27 @@
+输入样本长度 = 161，</content> 结束于 155
+findRegex = /<content>([\s\S]*?)</content>/is
+replaceString 长度 = 164240
+
+=== A. 完整消息 ===
+cleanUpMessage 后（前 120）: <content> <scene location="卡塞尔学院·图书馆二层" time="傍晚" mood="试探" /> <yanling user="诺诺" name="言灵·君焰" desc="试探性的热浪" /> 路明非把书推回架
+messageFormatting 产物长度 = 166388
+  [data-lz-content]=0  [data-lz-source]=0  <pre>=1  <code>=1  元素总数=3
+  可见文字（前 200）: <!doctype html> <html lang="zh-CN"> <head> <meta charset="utf-8"> <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"> <meta name="color-scheme" content="light dark
+  产物开头 160 字: <pre><code class="html language-html">&lt;!doctype html&gt; &lt;html lang="zh-CN"&gt; &lt;head&gt; &lt;meta charset="utf-8"&gt; &lt;meta name="viewport" content
+
+=== B. 流式逐 token ===
+  raw=  10 lz-content=0 pre=0 code=0 元素=   2 文字=""
+  raw=  20 lz-content=0 pre=0 code=0 元素=   3 文字="<scene loc"
+  raw=  30 lz-content=0 pre=0 code=0 元素=   3 文字="<scene location="卡塞尔"
+  raw=  40 lz-content=0 pre=0 code=0 元素=   4 文字="<scene location="卡塞尔学院·图书馆二层""
+  raw=  50 lz-content=0 pre=0 code=0 元素=   5 文字="<scene location="卡塞尔学院·图书馆二层" time="傍晚""
+  raw=  60 lz-content=0 pre=0 code=0 元素=   6 文字="<scene location="卡塞尔学院·图书馆二层" time="傍晚" mood="试探""
+  raw=  70 lz-content=0 pre=0 code=0 元素=   4 文字="<yanlin"
+  raw=  80 lz-content=0 pre=0 code=0 元素=   4 文字="<yanling user="诺诺"
+  raw=  90 lz-content=0 pre=0 code=0 元素=   5 文字="<yanling user="诺诺" name="言灵"
+  raw= 160 lz-content=0 pre=1 code=1 元素=   3 文字="<!doctype html> <html lang="zh-CN"> <head> <meta charset="ut"
+  raw= 161 lz-content=0 pre=1 code=1 元素=   3 文字="<!doctype html> <html lang="zh-CN"> <head> <meta charset="ut"
+
+>>> 第一次出现 <code>（说明模板被当成代码块）: raw=160
+>>> 第一次出现 [data-lz-content] 壳: 从未出现（流式期间完全没有渲染）
+>>> 第一次在可见文字里看到正文: raw=120

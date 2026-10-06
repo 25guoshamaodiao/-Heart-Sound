@@ -1,0 +1,20 @@
+--- fenced ---
+<pre><code class="html language-html">&lt;!doctype html&gt;
+&lt;html lang="zh-CN"&gt;&lt;head&gt;&lt;meta charset="utf-8"&gt;&lt;title&gt;t&lt;/title&gt;&lt;style&gt;:root{--x:#fff}&lt;/style&gt;&lt;/head&gt;&lt;body&gt;&lt;div data-lz-content&gt;X&lt;/div&gt;&lt;textarea data-lz-source="content"&gt;
+路明非把书推回架子。
+“你又在躲。”诺诺说。
+&lt;/textarea&gt;&lt;script&gt;console.log(1)&lt;/script&gt;&lt;/body&gt;&lt;/html&gt;
+</code></pre>
+
+--- raw ---
+<div data-lz-content=""><section><h1>标题</h1><p>正文占位</p></section></div>
+<p><textarea data-lz-source="content" hidden="">路明非把书推回架子。
+&lt;q&gt;“你又在躲。”&lt;/q&gt;诺诺说。
+</textarea></p>
+<style>[data-lz-content]{color:#123}</style>
+
+--- shell ---
+<div data-lz-content=""><pre data-lz-pending="">■ 正文生成中…</pre></div>
+<p><textarea data-lz-source="content" hidden="">路明非把书推回架子。
+&lt;q&gt;“你又在躲。”&lt;/q&gt;诺诺说。
+</textarea><style>[data-lz-content]{border:1px solid #ccc}</style></p>
