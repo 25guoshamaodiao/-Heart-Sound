@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "1.2";
+  const VERSION = "1.3";
   const SCRIPT_ID = typeof getScriptId === "function" ? getScriptId() : "silver_moon_styler";
   const STYLE_ID = `reasoning-style-${SCRIPT_ID}`;
   const BACKUP_KEY = `__silvermoon_backup_${SCRIPT_ID}`;
@@ -55,8 +55,8 @@
     ],
 
     // 银月写给 ST 的那对 wrapper（归一化的目标）。和 明月.json 模板同款。
-    canonicalPrefix: "[metacognition]\n",
-    canonicalSuffix: "\n</thinking>",
+    canonicalPrefix: "[metacognition]",
+    canonicalSuffix: "</thinking>",
 
     // 归一化正则放哪一层：'global'（全局正则）/ 'preset'（预设正则）/ 'character'（角色卡正则）
     // 默认全局：切预设也还在。注意 ST 的执行顺序是 全局 → 预设 → 角色卡（engine.js:11-16）。
@@ -152,16 +152,12 @@
     if (!settings.reasoning) settings.reasoning = {};
     const config = settings.reasoning;
 
-    // 接管其他预设的开头思维链时，wrapper 必须由银月来定（归一化正则写进去的就是它），
-    // 所以这一支不看 onlyIfUnset。原值在上面已经备份好，cleanup() 会还原。
-    if (CONFIG.adoptLeadingThink) {
-      let dirty = false;
-      if (config.auto_parse !== true) { config.auto_parse = true; dirty = true; }
-      if (config.prefix !== CONFIG.canonicalPrefix) { config.prefix = CONFIG.canonicalPrefix; dirty = true; }
-      if (config.suffix !== CONFIG.canonicalSuffix) { config.suffix = CONFIG.canonicalSuffix; dirty = true; }
-      if (dirty) persistSettings();
-      return;
-    }
+    // 接管其他预设的开头思维链时，wrapper 必须由银月来定（归一化正则写进去的就是它）。
+    // ⚠️ 但这**不能**在这里做：铺配置必须等探针和冲突检查都过了才允许
+    // （syncLeadingThink 里的 applyCanonicalConfig），否则会出现「让位了、却把
+    // ST 的 reasoning 配置改了一半」的状态 —— 那时 ST 会自己去搬 `[metacognition]…</thinking>`，
+    // 而预设自己的 `<think>` 包装链还在，两边一起动，正文和聊天记录都会被改坏。
+    if (CONFIG.adoptLeadingThink) return;
 
     let changed = false;
     const userConfigured = Boolean(config.prefix || config.suffix);
@@ -181,21 +177,29 @@
     if (changed) persistSettings();
   }
 
+  // 把配置还原成「银月动手之前」的样子；备份留着，之后还能再铺一次
+  function revertOwnReasoningConfig() {
+    if (savedReasoningState === null) return false;
+    try {
+      const settings = getST()?.getContext?.()?.powerUserSettings;
+      if (!settings) return false;
+      const config = settings.reasoning;
+      if (!config) return false;
+      config.auto_parse = savedReasoningState.auto_parse;
+      config.prefix = savedReasoningState.prefix;
+      config.suffix = savedReasoningState.suffix;
+      // 原本不存在 reasoning 键时整体移除，避免残留空对象
+      if (!savedReasoningState.existed) delete settings.reasoning;
+      persistSettings();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function restoreReasoningConfig() {
     if (savedReasoningState === null) return;
-    try {
-      const context = getST()?.getContext?.();
-      const settings = context && context.powerUserSettings;
-      if (settings && settings.reasoning) {
-        const config = settings.reasoning;
-        config.auto_parse = savedReasoningState.auto_parse;
-        config.prefix = savedReasoningState.prefix;
-        config.suffix = savedReasoningState.suffix;
-        // 原本不存在 reasoning 键时整体移除，避免残留空对象
-        if (!savedReasoningState.existed) delete settings.reasoning;
-        persistSettings();
-      }
-    } catch (_) { /* noop */ }
+    revertOwnReasoningConfig();
     savedReasoningState = null;
     try { delete window[BACKUP_KEY]; } catch (_) { /* noop */ }
   }
@@ -233,10 +237,13 @@
     state: 'off', // off | no-wrappers | probe-failed | yielded | installed | present | failed
     regex: '',
     replace: '',
+    rules: [],
     conflicts: [],
     probe: null,
     note: '',
     forced: false,
+    // 银月现在有没有占着 ST 的 reasoning 配置（让位时必须还回去）
+    configApplied: false,
   };
   let forcedTakeOver = false;
 
@@ -395,6 +402,26 @@
       };
     } catch (_) {
       return null;
+    }
+  }
+
+  // 铺银月那对 wrapper。**只允许在探针 + 冲突检查都过了之后调用**，
+  // 否则就会出现「让位了、配置却被改了一半」的坏状态。
+  function applyCanonicalConfig() {
+    if (!CONFIG.manageReasoningConfig) return false;
+    try {
+      const settings = getST()?.getContext?.()?.powerUserSettings;
+      if (!settings) return false;
+      if (!settings.reasoning) settings.reasoning = {};
+      const config = settings.reasoning;
+      let dirty = false;
+      if (config.auto_parse !== true) { config.auto_parse = true; dirty = true; }
+      if (config.prefix !== CONFIG.canonicalPrefix) { config.prefix = CONFIG.canonicalPrefix; dirty = true; }
+      if (config.suffix !== CONFIG.canonicalSuffix) { config.suffix = CONFIG.canonicalSuffix; dirty = true; }
+      if (dirty) persistSettings();
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -673,18 +700,25 @@
   }
 
   // ---- 总调度 ----
+  // 顺序很重要：**先铺配置（探针要用）→ 探针 → 冲突 → 才决定装不装**；
+  // 任何一步不过，都要把刚铺的配置**还回去**（revertOwnReasoningConfig）。
+  // 之前就是漏了这一步，才出现「让位了、ST 的 reasoning 配置却被改了一半」：
+  // ST 会自己去搬 `[metacognition]…</thinking>`，而预设自己的 `<think>` 包装链照跑，
+  // 两边一起动手 → 正文和聊天记录都被改坏（真实消息 <dream_plot> 那条就是这个症状）。
   function syncLeadingThink() {
     normalizeState.enabled = !!CONFIG.adoptLeadingThink;
     normalizeState.forced = forcedTakeOver;
     normalizeState.conflicts = [];
     normalizeState.note = "";
     normalizeState.probe = null;
+    normalizeState.configApplied = false;
 
     if (!CONFIG.adoptLeadingThink) {
       normalizeState.state = "off";
       normalizeState.regex = "";
       normalizeState.replace = "";
       normalizeState.rules = [];
+      revertOwnReasoningConfig();
       removeNormalizeRegex();
       return Promise.resolve(normalizeState);
     }
@@ -696,10 +730,14 @@
     if (!rules.length) {
       normalizeState.state = "no-wrappers";
       normalizeState.note = "leadingThinkWrappers 是空的";
+      revertOwnReasoningConfig();
       removeNormalizeRegex();
       warn("银月：adoptLeadingThink 开着，但 leadingThinkWrappers 是空的，没装归一化正则。");
       return Promise.resolve(normalizeState);
     }
+
+    // 铺配置（只在真正要接管的情况下才会留下来）
+    normalizeState.configApplied = applyCanonicalConfig();
 
     // 守卫一：探针 —— ST 真的会把这对 wrapper 解析成 reasoning 块吗
     const probe = probeCanonicalParse();
@@ -707,11 +745,13 @@
     if (!probe.ok) {
       normalizeState.state = "probe-failed";
       normalizeState.note = probe.reason;
+      revertOwnReasoningConfig();
+      normalizeState.configApplied = false;
       removeNormalizeRegex();
-      warn("银月：探针没过，**没装**归一化正则（装了只会往正文里写一串没人解析的 wrapper）。\n" +
+      warn("银月：探针没过，**没装**归一化正则，也把你原来的 reasoning 配置还回去了。\n" +
         "  原因：" + probe.reason + "\n  探针串：" + JSON.stringify(probe.sample) +
         "\n  现在生效的 reasoning 配置：控制台 __silverMoon.status().reasoning");
-      toast("银月：reasoning 探针没过，归一化正则没装（看控制台）", "warning");
+      toast("银月：reasoning 探针没过，归一化没接管（看控制台）", "warning");
       return Promise.resolve(normalizeState);
     }
 
@@ -721,8 +761,10 @@
     if (conflicts.length && CONFIG.yieldToOtherRegexes && !forcedTakeOver) {
       normalizeState.state = "yielded";
       normalizeState.note = "有 " + conflicts.length + " 处冲突，银月让位";
+      revertOwnReasoningConfig();
+      normalizeState.configApplied = false;
       removeNormalizeRegex();
-      warn("银月：这些标签有别的正则在管，银月让位（没装归一化正则）：\n" +
+      warn("银月：这些标签有别的正则在管，银月让位（没装归一化正则，配置也还回去了）：\n" +
         conflicts.map((c) => "  · " + c.tag + " ← " + c.regex + "（" + c.scope + "）").join("\n") +
         "\n  要强制由银月接管：控制台 __silverMoon.takeOver()");
       toast("银月：思维链归一让位（" + conflicts.length + " 处冲突，看控制台）", "warning");
