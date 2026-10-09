@@ -10,3 +10,12 @@ npm-cache/
 .dsh-diag/
 .work/chrome-profile*/
 .work/settings-backup-*.json
+
+# ── 快照 / 日志 / 机器相关的一次性诊断（可复现或只对本机有意义，不入库）──
+# 要进库的是"成品 + 文档 + 验证成品所需的自检台"，其余留在本地
+.work/beautify/
+.work/button-report.txt
+.work/live-button-diag.js
+.work/live-regex-check.js
+.work/verify-patch-integrity.js
+.work/release-body.json
