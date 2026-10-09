@@ -173,6 +173,43 @@ function leakCount(win, prefix, suffix) {
     check('B9 再跑一遍不会把 wrapper 叠起来（幂等）', once === twice, JSON.stringify(once) + ' vs ' + JSON.stringify(twice));
   }
 
+  /* ---------------- B10. 闭合规则不再被「开头就是 canonicalPrefix」挡住（v1.4.4 修） ---------------- */
+  section('B10. 别的预设直接吐 [metacognition]… 时也要能归一（v1.4.4）');
+  {
+    const env = await makeEnv();
+    const win = env.win;
+    const api = win.__silverMoon;
+    await api.refresh();
+    // 识别名单 leadingThinkWrappers 里明确收着 [metacognition]→[/metacognition] 这一对。
+    // 闭合规则只按「开头是不是 canonicalPrefix」挡的话，这一对永远归一不了：
+    // 规则 1 被 guard 挡住、规则 2 又只认「还没有闭合标签」的情形。
+    const m1 = win.__mirror.receive(0, '[metacognition]\n方括号收尾的CoT\n[/metacognition]\n\n正文甲');
+    check('B10a [metacognition]…[/metacognition] 能被归一 + 解析',
+      String(m1.extra.reasoning || '').indexOf('方括号收尾的CoT') !== -1 && m1.mes.trim() === '正文甲',
+      JSON.stringify(m1.extra.reasoning) + ' / ' + JSON.stringify(m1.mes));
+    const m2 = win.__mirror.receive(1, '[metacognition]\n开标签用了旧的收尾\n</think>\n\n正文乙');
+    check('B10b [metacognition]…</think>（canonical 开 + 非 canonical 收）也能归一',
+      String(m2.extra.reasoning || '').indexOf('开标签用了旧的收尾') !== -1 && m2.mes.trim() === '正文乙',
+      JSON.stringify(m2.extra.reasoning) + ' / ' + JSON.stringify(m2.mes));
+    check('B10c 两段都恰好一个块、正文 0 处残留 wrapper',
+      blockInfo(win, 0).count === 1 && blockInfo(win, 1).count === 1 &&
+      leakCount(win, api.config.canonicalPrefix, api.config.canonicalSuffix) === 0,
+      JSON.stringify({ b0: blockInfo(win, 0), b1: blockInfo(win, 1) }));
+
+    // 幂等：已经是完整 canonical 对的消息不许被再动一次
+    const once = win.__mirror.getRegexedString('[metacognition]x</thinking>y', 2, {});
+    const twice = win.__mirror.getRegexedString(once, 2, {});
+    check('B10d 完整 canonical 对幂等（再跑一遍一模一样）',
+      once === twice && once === '[metacognition]x</thinking>y', JSON.stringify(once));
+
+    // 保守性：已经是完整 canonical 对的消息，就算思维链里引用了别的字面 close 标签，
+    // 也不许被我们提前截断（那会让思维块提前结束、后半截漏进正文）
+    const quoted = '[metacognition]它提到了[/思考]但真正的收尾在</thinking>后面\n\n正文丙';
+    const g = win.__mirror.getRegexedString(quoted, 2, {});
+    check('B10e 完整 canonical 对里引用别的 close 标签时不动它（不提前截断）',
+      g === quoted, JSON.stringify(g));
+  }
+
   /* ---------------- C. 只吃开头 ---------------- */
   section('C. 只做「消息开头」那一处');
   {
