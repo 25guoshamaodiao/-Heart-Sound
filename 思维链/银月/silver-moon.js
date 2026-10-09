@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "1.4.3";
+  const VERSION = "1.4.4";
   const SCRIPT_ID = typeof getScriptId === "function" ? getScriptId() : "silver_moon_styler";
   const STYLE_ID = `reasoning-style-${SCRIPT_ID}`;
   const BACKUP_KEY = `__silvermoon_backup_${SCRIPT_ID}`;
@@ -156,6 +156,25 @@
   const OWNER_KEY = "__silverMoonOwner";
   let ownsInstance = true;
 
+  // 这一份实例的**身份**。SCRIPT_ID 说的是「哪个脚本条目」（脚本库里那份、CDN 那份是两个
+  // 不同的 id），但同一个条目在 iframe 重建时 id 不变 —— 光靠它回答不了「现在这份还是不是我」。
+  // v1.4.4 起再加一份 per-instance 身份，归属标记才真的能判「我有没有被接管」。
+  const INSTANCE_ID = (() => {
+    try {
+      if (typeof getIframeName === "function") {
+        const name = getIframeName();
+        if (name) return SCRIPT_ID + "@" + name;
+      }
+    } catch (_) { /* noop */ }
+    return SCRIPT_ID + "#" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  })();
+  // 本实例的启动时刻：同版本的两份实例比不出高低时，后来者接管（见 init 的让位判断）。
+  const INSTANCE_START_TS = Date.now();
+
+  // 用户明确卸载（__silverMoon.uninstall()）之后置真：被动事件一律不再动手。
+  // 否则 uninstall 之后来一次 app_ready / chat_id_changed，按钮和正则又被装回去了。
+  let disposed = false;
+
   function stTopWindow() {
     try {
       return window.top || window;
@@ -175,7 +194,14 @@
 
   function writeOwner() {
     try {
-      stTopWindow()[OWNER_KEY] = { id: SCRIPT_ID, version: VERSION, ts: Date.now() };
+      // id 保留给老版本的 stillOwner()（它只会比 id），instance 才是本版用来判「还是不是我」的。
+      stTopWindow()[OWNER_KEY] = {
+        instance: INSTANCE_ID,
+        id: SCRIPT_ID,
+        script: SCRIPT_ID,
+        version: VERSION,
+        ts: Date.now(),
+      };
     } catch (_) { /* noop */ }
   }
 
@@ -183,13 +209,33 @@
     try {
       const top = stTopWindow();
       const cur = top[OWNER_KEY];
-      if (cur && cur.id === SCRIPT_ID) delete top[OWNER_KEY];
+      // 只删自己登记的那条：旧实例 pagehide 时不许把新实例的登记删掉。
+      if (cur && stillOwner()) delete top[OWNER_KEY];
     } catch (_) { /* noop */ }
   }
 
   function stillOwner() {
     const cur = readOwner();
-    return !cur || cur.id === SCRIPT_ID;
+    if (!cur) return true; // 没人登记 → 就是我在管
+    if (cur.instance) return cur.instance === INSTANCE_ID;
+    return cur.id === SCRIPT_ID; // v1.4.3 及以前留下的记录（没有 instance 字段）
+  }
+
+  // 该不该把归属让给别人？（init 里只判一次）
+  //   别人版本更高 → 让；别人版本更低 → 抢（不管是不是同一个脚本条目）；
+  //   同版本 → 看是不是我这个实例：不是我，就比启动时刻，后来者接管。
+  function shouldYieldTo(owner) {
+    if (!owner) return false;
+    const theirs = versionRank(owner.version);
+    const mine = versionRank(VERSION);
+    if (theirs > mine) return true;
+    if (theirs < mine) return false;
+    // 同版本：登记的就是我这个实例（同一 iframe 重入，正常到不了这里）→ 不用让
+    if (owner.instance ? owner.instance === INSTANCE_ID : owner.id === SCRIPT_ID) return false;
+    // 同版本、不同实例：脚本库那份 + CDN 那份，或 iframe 重建的瞬间。后来者接管。
+    // ts 相等（同毫秒启动）也让对方赢，保证只有一份在写。
+    const ts = Number(owner.ts) || 0;
+    return ts >= INSTANCE_START_TS;
   }
 
   // "1.4.10" > "1.4.9"；认不出来的（老版本没有 VERSION）算 0。
@@ -403,6 +449,13 @@
   let injectRetrying = false;
   let injectRetryCount = 0;
 
+  // 被动同步监听（v1.4.4）：eventOn(...) 返回的 { stop() } 必须留着 —— 不留下就解绑不了，
+  // uninstall 之后 app_ready / chat_id_changed / visibilitychange 还会把我们叫醒，
+  // 被叫醒的 syncInjectButton() / resyncIfStripped() 会把按钮和正则重新装回去。
+  let passiveHandles = [];
+  let passiveVisibilityHandler = null;
+  let passiveSyncListener = null;
+
   function scriptButtonApi() {
     const get = bareGlobal("getScriptButtons");
     const replace = bareGlobal("replaceScriptButtons");
@@ -414,7 +467,7 @@
 
   // 按钮这次该是「可重试」还是「已就位」。必须看 state.state —— no-wrappers 时
   // normalizeState.enabled 也是 true。注意返回的是**布尔**：只要开着常驻按钮，
-  // 两种情况都得有按钮，区别只在绑不绑点击（名字恒定，不随状态变）。
+  // 两种情况都得有按钮（v1.4.4 起两种状态都绑点击，区别只在于 mode 表达的状态与文案）。
   function injectButtonMode(state) {
     const s = state || normalizeState;
     if (!CONFIG.showInjectButton) return false;
@@ -432,15 +485,14 @@
 
   function onInjectButtonClick() {
     if (injectRetrying) return Promise.resolve(false);
-    // 常驻按钮 → 成功态也可点。点了就别白跑一遍探测（重跑 syncLeadingThink 会重写
-    // reasoning 配置、重装正则），直接告诉玩家「已经在位、不用点」。
-    if (!injectButtonMode(normalizeState)) {
-      toast("银月：思维链归一已就位，不用点它。", "info");
-      return Promise.resolve(true);
-    }
+    // 常驻按钮 → 两种状态都可点，而且点了就**真的再同步一次**（v1.4.4 修）：
+    // 以前成功态只弹一句「不用点它」，等于按钮是个摆设；而「一开页面就成功」的用户
+    // 连点击通道都没绑上（只有失败态才绑），点了毫无反应。现在统一走重同步：
+    // 已经就位时这次同步通常什么都不会改（installNormalizeRegex 会先比一遍，
+    // 没变化就不碰 ST，见那里的注释），所以代价只是一次探针，不会重排聊天。
     injectRetrying = true;
     injectRetryCount += 1;
-    toast("银月：正在重试注入……", "info");
+    toast("银月：正在重新同步……", "info");
     log("注入按钮被点了（第 " + injectRetryCount + " 次）");
     return Promise.resolve()
       .then(() => syncLeadingThink())
@@ -470,14 +522,15 @@
 
   // 幂等：syncLeadingThink() 落地后、每次重试后、app_ready 等事件后、cleanup() 时都会调。
   //
-  // v1.4.2 起是**常驻**按钮：
-  //   · 成功（installed / present）→ 按钮在，但不绑点击（点了只提示一句「不用点」）；
-  //   · 失败（probe-failed / failed）→ 按钮在，绑上点击 → 重试注入；
+  // v1.4.2 起是**常驻**按钮，v1.4.4 起两种状态**都绑点击**：
+  //   · 成功（installed / present）→ 按钮在，点了再同步一次并播报「已就位」；
+  //   · 失败（probe-failed / failed）→ 按钮在，点了重试注入；
   //   · 两者都要按钮存在且 visible；名字恒定（见 injectButtonLabel() 的注释）。
   // injectButtonAlways:false 时才退回 v1.4 的「失败才露面」。
   // 写入仍然要回读校验：app_ready 之前那次写会被静默丢掉（见本段开头注释）。
   function syncInjectButton() {
     try {
+      if (disposed) return;
       if (injectRetrying) return;
       const api = scriptButtonApi();
       const mode = injectButtonMode(normalizeState);
@@ -512,9 +565,9 @@
         return;
       }
 
-      if (mode) {
-        if (!injectButtonEventBound) bindInjectButtonEvent(api);
-      }
+      // v1.4.4：两种状态都绑点击（以前只在失败态绑，「一开页面就成功」的用户点了毫无反应）。
+      // 只绑一次、整条生命周期不解绑：已就位时点击该干什么由 onInjectButtonClick() 自己判断。
+      if (!injectButtonEventBound) bindInjectButtonEvent(api);
       // 已就位 → **不在这里解绑**：syncLeadingThink() 中途会把 normalizeState 重置成
       // off（那一刻 mode 也是 ok），在这里解绑会把「重试中」的点击通道误拆掉。
       // 交给 onInjectButtonClick() 自己按 mode 判断该不该干活。
@@ -588,6 +641,13 @@
   function scheduleInjectStoreRetry() {
     if (injectStoreRetryTimer) return;
     if (injectStoreGaveUp) return;
+    // ⚠️ 顺序：先查「页面在不在后台」，再扣预算。
+    // 反过来的话，页面挂在后台时每次都由事件推进来一次、白扣一次，
+    // 20 次预算会在用户没看页面的时候被耗光（v1.4.3 及以前就是反的）。
+    try {
+      const doc = getTopDocument();
+      if (doc && doc.hidden) return; // 后台不计数、不空转，等 visibilitychange 再补
+    } catch (_) { /* noop */ }
     const max = Math.max(0, Number(CONFIG.injectStoreRetryMax) || 0);
     if (injectStoreRetryCount >= max) {
       if (!injectStoreGaveUp) {
@@ -598,10 +658,6 @@
       return;
     }
     injectStoreRetryCount += 1;
-    try {
-      const doc = getTopDocument();
-      if (doc && doc.hidden) return; // 页面在后台就别空转，等 visibilitychange 补
-    } catch (_) { /* noop */ }
     const delay = Math.max(0, Number(CONFIG.injectStoreRetryDelayMs) || 0);
     try {
       injectStoreRetryTimer = setTimeout(() => {
@@ -678,7 +734,8 @@
   //   · source 里的 / 要转义
   //   · 换行/回车/制表必须写成 \n \r \t —— 真换行放进去会让 ST 的
   //     regexFromString（utils.js:1279，用的是 `.` 不匹配换行的那套解析）当场解析失败。
-  //     canonicalPrefix 是 "[metacognition]\n"，带真换行，这里必须处理。
+  //     canonicalPrefix / canonicalSuffix 现在的字面量不带换行，但这里照样要兜住
+  //     带换行的写法（将来把配置改回 "[metacognition]\n" 也不能炸）。
   function regexEscapeLiteral(text) {
     return String(text).replace(/[\\\n\r\t.*+?^${}()|[\]\/]/g, (ch) => {
       if (ch === "\n") return "\\n";
@@ -712,15 +769,29 @@
   function buildNormalizeRules() {
     const alt = wrapperAlternation();
     if (!alt) return [];
-    // `(?!canonical)` 很关键：规则不能对自己的产物再动手。
-    // canonicalPrefix 是 "[metacognition]\n"，而名单里也有 "[metacognition]"，
-    // 不加这个负向预查，规则 2 会把刚写好的 "[metacognition]\n思考" 再拼一次前缀，
-    // 变成 "[metacognition]\n\n思考"（思维块开头多一个空行）。
-    const guard = CONFIG.canonicalPrefix ? "(?!" + regexEscapeLiteral(CONFIG.canonicalPrefix) + ")" : "";
+    const cp = CONFIG.canonicalPrefix ? regexEscapeLiteral(CONFIG.canonicalPrefix) : "";
+    const cs = CONFIG.canonicalSuffix ? regexEscapeLiteral(CONFIG.canonicalSuffix) : "";
+
+    // 规则 2（流式）的 guard：它的产物就是 canonicalPrefix + 内容，不能再对自己的产物动手，
+    // 否则 "[metacognition]思考" 会被再拼一次前缀，开头多一个前缀（或一个空行）。
+    const guardStream = cp ? "(?!" + cp + ")" : "";
+
+    // 规则 1（闭合）的 guard 只挡「**已经是完整 canonical 对**」的消息，不是「以
+    // canonicalPrefix 开头」的消息 —— 这一字之差是真 bug 的分水岭：
+    //   · 别的预设会直接吐 "[metacognition]思考[/metacognition]" 或 "[metacognition]思考</think>"
+    //     （识别名单 leadingThinkWrappers 里明确收着这两对）。只按「开头」挡的话，
+    //     规则 1 被 guard 挡住、规则 2 又只认「还没有闭合标签」的情形 → 两条都不动手，
+    //     这种预设的思维链**永远缩不进去**，正是「有时候缩不进去」的一个真凶。
+    //   · 已经写成完整 canonical 对的消息仍然让路：一是幂等（改动也等于没改），
+    //     二是别把模型在思维链里引用的字面 close 标签（如 [/思考]）当成真闭合 ——
+    //     那会让思维块提前结束、后半截漏进正文。ST 自己按第一个 canonicalSuffix 解析，
+    //     我们不该比它更激进。
+    const guardClosed = cp && cs ? "(?!" + cp + "[\\s\\S]*?" + cs + ")" : "";
+
     const rules = [
       {
         name: CONFIG.normalizeScriptName,
-        find: "/^" + guard + "\\s*(?:" + alt.opens + ")([\\s\\S]*?)(?:" + alt.closes + ")/s",
+        find: "/^" + guardClosed + "\\s*(?:" + alt.opens + ")([\\s\\S]*?)(?:" + alt.closes + ")/s",
         replace: CONFIG.canonicalPrefix + "$1" + CONFIG.canonicalSuffix,
         streaming: false,
       },
@@ -728,7 +799,7 @@
     if (CONFIG.normalizeWhileStreaming) {
       rules.push({
         name: CONFIG.normalizeStreamScriptName,
-        find: "/^" + guard + "\\s*(?:" + alt.opens + ")([\\s\\S]*)$/s",
+        find: "/^" + guardStream + "\\s*(?:" + alt.opens + ")([\\s\\S]*)$/s",
         replace: CONFIG.canonicalPrefix + "$1",
         streaming: true,
       });
@@ -985,6 +1056,37 @@
     }
   }
 
+  // 「这条已经在位、而且和计划要写的一模一样」→ 就没必要再写一遍。
+  // 酒馆助手 updateTavernRegexesWith 的落地是 saveSettings() + render_tavern_regexes_debounced()
+  // = **重排整段聊天**（tavern_regex.ts:249-256）。每次开页面都白排一次很贵，所以先比后写。
+  // 只比计划里要写的字段：已有条目还会带 id / scriptName / regexBinding_scriptId 之类，
+  // 多出来的键不算「变了」。两种格式（酒馆助手 / 酒馆原生）都认。
+  // 注意 enabled / run_on_edit 要求**明确为真**：字段缺失时宁可多写一次，也不能把
+  // 「其实是被禁用的」当成「没变化」跳过（那会让归一化静默失效 = 思维链缩不进去）。
+  function normalizeEntryMatches(entry, rule) {
+    if (!entry) return false;
+    const isTH = entry.script_name !== undefined;
+    const name = isTH ? entry.script_name : entry.scriptName;
+    if (name !== rule.name) return false;
+    const find = isTH ? entry.find_regex : entry.findRegex;
+    const replace = isTH ? entry.replace_string : entry.replaceString;
+    if (String(find || "") !== rule.find) return false;
+    if (String(replace || "") !== rule.replace) return false;
+    if (isTH) {
+      if (entry.enabled !== true) return false;
+      if (entry.run_on_edit !== true) return false;
+    } else {
+      if (entry.disabled === true) return false;
+      if (entry.runOnEdit === false) return false;
+      if (entry.markdownOnly === true || entry.promptOnly === true) return false;
+    }
+    const dest = entry.destination;
+    if (dest && (dest.display || dest.prompt)) return false;
+    const src = entry.source;
+    if (src && (src.user_input || src.slash_command || src.world_info || src.reasoning || src.ai_output === false)) return false;
+    return true;
+  }
+
   function installNormalizeRegex() {
     const rules = buildNormalizeRules();
     if (!rules.length) return Promise.resolve("no-wrappers");
@@ -993,37 +1095,54 @@
     const existed = scopeHasNormalizeRegex(api, scope);
     if (typeof api.get === "function" && typeof api.update === "function") {
       return Promise.resolve()
-        .then(() => api.update((regexes) => {
+        .then(() => {
           const wanted = rules.map((r) => r.name);
           const nameOf = (r) => (r && (r.script_name || r.scriptName)) || "";
-          // 先把「不再需要的自己人」摘掉（比如刚把流式那条关掉），剩下的再 upsert
-          const next = (regexes || []).filter((r) => !(r && isOurNormalizeName(nameOf(r)) && wanted.indexOf(nameOf(r)) === -1));
-          // 中途被关掉（比如 init 那次安装还没落地、用户就 takeOver/uninstall 了）：
-          // 这一趟改成「摘干净」，别把已经关掉的东西又写回去。
-          if (!CONFIG.adoptLeadingThink) {
-            return next.filter((r) => !(r && isOurNormalizeName(nameOf(r))));
+          // 先读一遍现状：既用来判断「要不要写」，也用来判断「有没有自己的陈旧条目要摘」。
+          let current = null;
+          try {
+            const got = api.get(scope);
+            current = Array.isArray(got) ? got : null;
+          } catch (error) {
+            warn("读不到现有正则列表，按「需要写」处理。", error);
           }
-          for (const rule of rules) {
-            let hit = false;
-            for (let i = 0; i < next.length; i++) {
-              if (next[i] && (next[i].script_name === rule.name || next[i].scriptName === rule.name)) {
-                next[i] = Object.assign({}, next[i], {
-                  enabled: true,
-                  find_regex: rule.find,
-                  replace_string: rule.replace,
-                  source: { user_input: false, ai_output: true, slash_command: false, world_info: false, reasoning: false },
-                  // display/prompt 都是 false ↔ markdownOnly/promptOnly 都是 false（tavern_regex.ts:154-157）
-                  destination: { display: false, prompt: false },
-                  run_on_edit: true,
-                });
-                hit = true;
-              }
+          if (current) {
+            const stale = current.filter((r) => r && isOurNormalizeName(nameOf(r)) && wanted.indexOf(nameOf(r)) === -1);
+            const allMatch = rules.every((rule) => current.some((entry) => normalizeEntryMatches(entry, rule)));
+            if (CONFIG.adoptLeadingThink && !stale.length && allMatch) {
+              log("归一化正则已在位且与计划一致 → 跳过写回（省掉酒馆助手那次整段聊天重排）");
+              return existed ? "present" : "installed";
             }
-            if (!hit) next.push(makeNormalizeScriptTH(rule.name, rule.find, rule.replace));
           }
-          return next;
-        }, scope))
-        .then(() => (existed ? "present" : "installed"))
+          return Promise.resolve(api.update((regexes) => {
+            // 先把「不再需要的自己人」摘掉（比如刚把流式那条关掉），剩下的再 upsert
+            const next = (regexes || []).filter((r) => !(r && isOurNormalizeName(nameOf(r)) && wanted.indexOf(nameOf(r)) === -1));
+            // 中途被关掉（比如 init 那次安装还没落地、用户就 takeOver/uninstall 了）：
+            // 这一趟改成「摘干净」，别把已经关掉的东西又写回去。
+            if (!CONFIG.adoptLeadingThink) {
+              return next.filter((r) => !(r && isOurNormalizeName(nameOf(r))));
+            }
+            for (const rule of rules) {
+              let hit = false;
+              for (let i = 0; i < next.length; i++) {
+                if (next[i] && (next[i].script_name === rule.name || next[i].scriptName === rule.name)) {
+                  next[i] = Object.assign({}, next[i], {
+                    enabled: true,
+                    find_regex: rule.find,
+                    replace_string: rule.replace,
+                    source: { user_input: false, ai_output: true, slash_command: false, world_info: false, reasoning: false },
+                    // display/prompt 都是 false ↔ markdownOnly/promptOnly 都是 false（tavern_regex.ts:154-157）
+                    destination: { display: false, prompt: false },
+                    run_on_edit: true,
+                  });
+                  hit = true;
+                }
+              }
+              if (!hit) next.push(makeNormalizeScriptTH(rule.name, rule.find, rule.replace));
+            }
+            return next;
+          }, scope)).then(() => (existed ? "present" : "installed"));
+        })
         .catch((error) => {
           warn("装归一化正则失败，退回原生设置。", error);
           return installNormalizeRegexNative(rules);
@@ -1039,6 +1158,13 @@
       if (!settings) return "failed";
       if (!Array.isArray(settings.regex)) settings.regex = [];
       const wanted = rules.map((r) => r.name);
+      const stale = settings.regex.filter((r) => r && isOurNormalizeName(r.scriptName) && wanted.indexOf(r.scriptName) === -1);
+      const allMatch = rules.every((rule) => settings.regex.some((entry) => normalizeEntryMatches(entry, rule)));
+      // 同酒馆助手那条路：没变化就不落盘（这里省掉的是 saveSettingsDebounced + 聊天重排）
+      if (CONFIG.adoptLeadingThink && !stale.length && allMatch) {
+        log("归一化正则（原生列表）已在位且与计划一致 → 跳过写回");
+        return "present";
+      }
       // 同样先摘掉不再需要的自己人
       settings.regex = settings.regex.filter((r) => !(r && isOurNormalizeName(r.scriptName) && wanted.indexOf(r.scriptName) === -1));
       let anyFound = false;
@@ -1229,8 +1355,11 @@
   }
 
   // 注入按钮的对外快照（status().injectButton 和 __silverMoon.injectButton() 共用）。
-  // mode 是 v1.4.2 新增字段：true = 「可重试」（点了会重跑 syncLeadingThink()），
-  // false = 「已就位」（点了只提示一句、不重跑探测）。want 保留为旧名（= mode）。
+  // mode 是 v1.4.2 新增字段，v1.4.4 起两种状态**都绑点击**：
+  //   true  = 「没注入上」（probe-failed / failed）→ 点了重试注入；
+  //   false = 「已就位」→ 点了也照样再同步一次（v1.4.4 修；以前只弹一句提示，
+  //           而且只有失败态才绑点击，一开页面就成功的用户点了毫无反应）。
+  // want 保留为旧名（= mode）。
   function injectButtonSnapshot() {
     const mode = injectButtonMode(normalizeState);
     return {
@@ -1258,10 +1387,12 @@
     const cur = readOwner();
     return {
       self: SCRIPT_ID,
+      instance: INSTANCE_ID,
       version: VERSION,
-      mine: ownsInstance && stillOwner(),
+      disposed: disposed,
+      mine: !disposed && ownsInstance && stillOwner(),
       // 现在 ST 页面上登记的归属（null = 还没有人登记）
-      current: cur ? { id: cur.id, version: cur.version } : null,
+      current: cur ? { instance: cur.instance || null, id: cur.id, version: cur.version, ts: cur.ts } : null,
     };
   }
 
@@ -1298,15 +1429,20 @@
           return syncLeadingThink().then((s) => { syncInjectButton(); return s; });
         },
         uninstall: () => {
-          // 完整拆卸（摘正则 + 去样式 + 收按钮 + 还原 reasoning），并且放弃归属，
-          // 免得下一份实例因为「已有更新的一份在跑」而错误让位。
-          cleanup();
+          // 完整拆卸：摘正则 + 去样式 + 收按钮 + 还原 reasoning（只有确实是我铺的才还原），
+          // 并且放弃归属、停掉全部被动监听 —— 卸载之后不许被 app_ready 之类重新装回来。
+          // 返回值是真的回执：false = 这一份本来就没在管（让位态），只把监听停了。
+          const touched = cleanup(true);
           forcedTakeOver = false;
-          log("SilverMoon 已完整拆卸（uninstall）。");
-          return true;
+          log("SilverMoon 已完整拆卸（uninstall）：" + (touched ? "已摘掉自己的东西。" : "本来没在管，只停了监听。"));
+          return touched;
         },
         install: () => {
           forcedTakeOver = false;
+          // 卸载过就先把「已卸载」状态清掉并重新武装被动监听（幂等），
+          // 否则装回来之后按钮同步与自愈都不会再响应事件。
+          disposed = false;
+          bindPassiveSyncTriggers();
           return syncLeadingThink().then((s) => { syncInjectButton(); return s; });
         },
       };
@@ -1680,16 +1816,51 @@
   // 顺序重要：必须**先**摘掉归一化正则，再还原 prefix/suffix。反过来的话，
   // 正则还在往正文里写 wrapper、ST 却已经不再解析它，正文就会留下字面 wrapper。
   //
-  // ⚠ 这是「用户明确要卸载」用的（__silverMoon.uninstall()）。**pagehide 不走这里**
-  // （一旦被更新的实例接管，这份就不该再动共享设置，只摘自己那份样式）。
-  function cleanup() {
-    if (ownsInstance && stillOwner()) {
+  // force=true 是「用户明确卸载」用的（__silverMoon.uninstall()）：
+  //   · 不复核归属 —— 正则/样式/按钮都是按**我们自己的名字**认的，摘掉不会伤到别人；
+  //   · 但 reasoning 配置只在「确实是我铺的」时才还原，别人铺的不许碰；
+  //   · 顺手 disposed=true + 停掉全部被动监听，否则下一次 app_ready 会把东西装回来。
+  // ⚠ pagehide 不走这里（见 onPageHide）：一旦被更新的实例接管，这份就不该再动共享设置。
+  function cleanup(force) {
+    const mayTouchShared = force ? true : (ownsInstance && stillOwner());
+    disposed = true;
+    stopPassiveSyncTriggers();
+    clearInjectStoreRetry();
+    unbindInjectButtonEvent();
+    if (mayTouchShared) {
       removeNormalizeRegex();
       removeStyle();
       hideInjectButton();
-      restoreReasoningConfig();
+      injectButtonRegistered = false;
+      injectButtonVisible = false;
+      injectButtonStoreReady = false;
+      // 只有「我确实是当前归属者」才还原 reasoning：让位/被接管的实例不许改共享配置。
+      if (ownsInstance && stillOwner()) restoreReasoningConfig();
     }
-    releaseOwner();
+    if (ownsInstance && stillOwner()) releaseOwner();
+    normalizeState.state = "off";
+    normalizeState.enabled = false;
+    return mayTouchShared;
+  }
+
+  // 停掉被动同步监听（幂等）。cleanup/uninstall 都走这里。
+  function stopPassiveSyncTriggers() {
+    const handles = passiveHandles.slice();
+    passiveHandles.length = 0;
+    for (const h of handles) {
+      try {
+        if (h && typeof h.stop === "function") h.stop();
+        else if (typeof h === "function") h();
+      } catch (_) { /* noop */ }
+    }
+    try {
+      if (passiveVisibilityHandler) document.removeEventListener("visibilitychange", passiveVisibilityHandler);
+    } catch (_) { /* noop */ }
+    passiveVisibilityHandler = null;
+    try {
+      if (passiveSyncListener) window.removeEventListener("silver-moon:sync", passiveSyncListener);
+    } catch (_) { /* noop */ }
+    passiveSyncListener = null;
   }
 
   // iframe 被拆掉时**只放弃归属 + 收掉自己的定时器**，绝不碰 ST 设置、正则、样式。
@@ -1706,7 +1877,10 @@
   // 本来就不该装，不去打扰。
   function resyncIfStripped() {
     try {
-      if (!ownsInstance) return;
+      // disposed：用户明确卸载过，别再自己装回来。
+      // stillOwner()：同版本双实例时，被接管的那份也认为自己 ownsInstance，
+      // 只有 stillOwner() 能回答「现在这份还是不是我」，不加它两边会一起抢装。
+      if (disposed || !ownsInstance || !stillOwner()) return;
       const wasLive = normalizeState.state === "installed" || normalizeState.state === "present";
       if (!wasLive) return;
 
@@ -1751,17 +1925,20 @@
       window.__silverMoonRuntime = true;
     } catch (_) { /* noop */ }
 
-    // ② 已经有**更新**的一份银月在跑就让位：两份同时写共享设置只会互相拆。
+    // ② 已经有「更新的一份」或「同版本但更晚启动的一份」在管就让位。
+    //    v1.4.4 起同版本也要判：以前只比版本号，脚本库那份 + CDN 那份同为同一版本时
+    //    谁都不让位（它们连 SCRIPT_ID 都不同），于是两份一起写共享设置、互相拆。
     const owner = readOwner();
-    if (owner && owner.id !== SCRIPT_ID && versionRank(owner.version) > versionRank(VERSION)) {
+    if (shouldYieldTo(owner)) {
       ownsInstance = false;
       warn(
-        `银月：已有一份更新的在跑（v${owner.version}），这一份（v${VERSION}）让位，不做任何改动。` +
-          `　想确认状态：__silverMoon.status()`,
+        `银月：已经有一份在管（v${owner ? owner.version : "?"}，${owner && owner.instance ? "另一个 iframe" : "同一个脚本的旧实例"}），` +
+          `这一份（v${VERSION}）让位，不做任何改动。　想确认状态：__silverMoon.status()`,
       );
       return;
     }
     ownsInstance = true;
+    disposed = false;
     writeOwner();
 
     // 注意：这里**不调用 cleanup()**（v1.4.3 起）。旧版 init 开头 cleanup 是为了清
@@ -1776,9 +1953,9 @@
     window.addEventListener("pagehide", onPageHide);
     // 给「不想开控制台」的人留一个重新注入的口子：
     //   window.dispatchEvent(new Event("silver-moon:sync"))
-    window.addEventListener("silver-moon:sync", () => {
-      syncLeadingThink().then(syncInjectButton);
-    });
+    // 句柄留着：cleanup/uninstall 时要 removeEventListener，不然卸载之后还会被它叫醒。
+    passiveSyncListener = () => { syncLeadingThink().then(syncInjectButton); };
+    window.addEventListener("silver-moon:sync", passiveSyncListener);
     bindPassiveSyncTriggers();
     log(`SilverMoon styler initialized (v${VERSION}).`);
   }
@@ -1792,24 +1969,30 @@
   //    也是之前那次「写着写着被 store 丢掉」之后最该补一次的时刻。
   //  · chat_id_changed / settings_loaded：切聊天、重载设置后按钮列表会重建。
   //  · visibilitychange：页面从后台回来时把因 document.hidden 而暂停的重试续上。
+  // 幂等：已经绑过就直接返回；卸载过（disposed）不绑（install() 会先清掉 disposed 再来调）。
   function bindPassiveSyncTriggers() {
+    if (disposed) return;
+    if (passiveHandles.length || passiveVisibilityHandler) return;
     const on = bareGlobal("eventOn");
     const names = ["app_ready", "chat_id_changed", "settings_loaded"];
     if (typeof on === "function") {
       for (const name of names) {
         try {
-          on(name, () => { syncInjectButton(); resyncIfStripped(); });
+          // 返回的 { stop() } 收着，cleanup/卸载时解绑（不然监听会一直把我们叫醒）
+          const off = on(name, () => { syncInjectButton(); resyncIfStripped(); });
+          if (off) passiveHandles.push(off);
         } catch (_) { /* 老版本没有这个事件就跳过 */ }
       }
     }
     try {
-      document.addEventListener("visibilitychange", () => {
+      passiveVisibilityHandler = () => {
         if (!document.hidden) {
           syncInjectButton();
           resyncIfStripped();
         }
-      });
-    } catch (_) { /* noop */ }
+      };
+      document.addEventListener("visibilitychange", passiveVisibilityHandler);
+    } catch (_) { passiveVisibilityHandler = null; }
   }
 
   // 启动（使用 jQuery 以确保在动态加载时也能正确执行）

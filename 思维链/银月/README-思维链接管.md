@@ -1,4 +1,4 @@
-# 银月 · 接管「其他预设的开头思维链」（v1.4.3，默认**开**）
+# 银月 · 接管「其他预设的开头思维链」（v1.4.4，默认**开**）
 
 对应脚本：`silver-moon.js`（就是"老的那个"，和 `silver-moon-blocks-*.js` 是两回事）
 
@@ -248,7 +248,7 @@ __silverMoon.retryInject()   // 等价于点一下注入按钮（按钮拿不到
 `normalize.configApplied`：银月现在有没有占着 ST 的 reasoning 配置 ——
 `yielded` / `probe-failed` / `off` 时它必须是 `false`（配置已还回去）。
 
-### 4.1 注入按钮（v1.4 起，v1.4.1 修好点击，v1.4.2 常驻）
+### 4.1 注入按钮（v1.4 起，v1.4.1 修好点击，v1.4.2 常驻，v1.4.4 起两种状态都能点）
 
 **它解决什么**：本脚本过去除 `init()` 之外没有任何触发点，安装正则、写 `reasoning`
 配置都只发生一次。开局探针没过就永久卡在 `probe-failed`——
@@ -257,29 +257,31 @@ __silverMoon.retryInject()   // 等价于点一下注入按钮（按钮拿不到
 ```
 syncLeadingThink() 落地 / app_ready / chat_id_changed / settings_loaded
   └─ syncInjectButton()
-        ├─ 状态属于 CONFIG.injectRetryStates（默认 ["probe-failed", "failed"]）
-        │     → 模式「可重试」：写「银月·注入」并可见 + 绑好点击事件
-        └─ 已就位（installed / present）等其它状态
-              → 模式「已就位」：按钮**照样在**（CONFIG.injectButtonAlways 默认 true），只是不绑点击
+        → 写「银月·注入」并可见，**并且绑好点击**（v1.4.4 起不分状态，之前只绑失败态）
 点按钮 → onInjectButtonClick()
-  └─ 先看模式：
-        ├─ 「已就位」→ 只 toast 一句「不用点」，**不重跑探测**
-        └─ 「可重试」→ syncLeadingThink() 重跑一遍
-              ├─ installed / present → toast 成功，模式转「已就位」（按钮留着）
-              └─ 还是不行          → toast 告警（带上失败原因）+ 保持可重试，可以再点
+  └─ 一律重跑一遍 syncLeadingThink()（v1.4.4 起）
+        ├─ installed / present → toast「思维链归一已就位」
+        ├─ yielded             → toast 告警「让位了（N 处冲突）」
+        └─ probe-failed 等     → toast 告警（带失败原因），可以再点
 ```
 
 | 状态 | 按钮 | 点击 |
 |---|---|---|
-| `installed` / `present` | 在，`mode: "ok"` | 只提示「不用点」，不重跑探测 |
-| `probe-failed` / `failed` | 在，`mode: "retry"` | 重跑 `syncLeadingThink()` |
-| `yielded`（主动让位） | 在，`mode: "ok"` | 只提示「不用点」 |
-| `off` / `no-wrappers` | 在，`mode: "ok"` | 只提示「不用点」 |
+| `installed` / `present` | 在，`mode: "ok"` | 再同步一次 → toast「已就位」 |
+| `probe-failed` / `failed` | 在，`mode: "retry"` | 再同步一次 → 没好就 toast 告警 |
+| `yielded`（主动让位） | 在，`mode: "ok"` | 再同步一次 → toast「让位了（N 处冲突）」 |
+| `off` / `no-wrappers` | 在，`mode: "ok"` | 再同步一次 |
 | `CONFIG.injectButtonAlways = false` | 只在 `probe-failed` / `failed` 时出现（v1.4 老行为） | 同上 |
 
 > 为什么改成常驻：v1.4 的设计是「只在失败时出现」，结果按钮一出现就说明已经坏了，
 > 成功时反而什么都看不到，没法回答「它到底在没在工作」。常驻之后状态不写进名字，
-> 而是走 `status().injectButton.mode`：成功态就是「按钮在、点了不做事」。
+> 而是走 `status().injectButton.mode`。
+>
+> **v1.4.4 修的是「常驻按钮是个摆设」**：v1.4.2 / v1.4.3 只在失败态才绑点击，所以
+> 「一开页面就直接成功」的用户点它**毫无反应**（连提示都没有），而成功态那段
+> 「点了提示一句」的代码根本执行不到。现在两种状态都绑点击、都真跑一遍同步。
+> 代价很小：正则没变化时 `installNormalizeRegex()` 会先比一遍、直接跳过写入（见 §5 第 4 条），
+> 所以点它**不会重排聊天**。
 
 **真实 API（这一节是踩坑记录，别改回去）**：酒馆助手 4.11.3 **没有**
 `registerScriptButton`，也**没有** `listenEvent`（全仓 0 命中，`dist/index.js` 里都搜不到）。
@@ -312,11 +314,14 @@ syncLeadingThink() 落地 / app_ready / chat_id_changed / settings_loaded
   写入路径（`writeInjectButtonEntry()`）还会**按名字去重**，同名重复条目只留一条。
 * 酒馆助手的按钮全局一个都没有时（老版本 / 脚本不在 iframe 里跑）：只打一条 warn，
   脚本照常跑，用 `__silverMoon.retryInject()` 兜底。
-* **`yielded`（让位）不绑点击**（设计如此）：让位是「有别的正则在管同一批标签，银月主动退让」，
-  不是失败，不该把玩家引去点重试。真想让让位也进可重试模式：
-  `CONFIG.injectRetryStates.push("yielded")`。
+* **`yielded`（让位）也能点**（v1.4.4 起）：点了是「把冲突重查一遍」，不是「重试注入」；
+  仍然让位就如实 toast「让位了（N 处冲突）」，不假装成功。
 * 常驻模式下**不再有「成功就撤掉按钮」**这一步；`hideInjectButton()` 只在
-  `cleanup()` / `showInjectButton` 关掉时跑。
+  `cleanup()` / `uninstall()` / `showInjectButton` 关掉时跑。
+* **`uninstall()` 是粘性的**（v1.4.4 起）：它会停掉全部被动监听（`app_ready` /
+  `chat_id_changed` / `settings_loaded` / `visibilitychange` / `silver-moon:sync`）并把状态打到
+  `off`，所以卸载之后**不会**被下一次 `app_ready` 把按钮和正则又装回来；
+  想重新接管走 `__silverMoon.install()`（会重新武装监听）。
 
 开关 / 排查：
 
@@ -358,17 +363,25 @@ __silverMoon.retryInject()    // 等价于点一下按钮
 2. **同时跑两份银月**（脚本库里一份 + 某个预设的「一键启动器」`import` 的 CDN 一份）：
    v1.2.0 那份没有归属概念，会照样把 v1.4.3 的正则摘掉。
 
-**v1.4.3 的对策**（三条，都在 `silver-moon.js` 里）：
+**v1.4.3 的对策**（三条，都在 `silver-moon.js` 里；v1.4.4 又加固了两处）：
 
-* **归属标记**：ST 顶层 window 上的 `__silverMoonOwner = {id, version, ts}`。启动时比版本号
-  （`versionRank()`）：已有**更新**的一份在跑，这一份就**让位**（什么都不做，只 warn）；
-  自己更新就接管。`status().owner` 能看现状（`mine: false` = 已让位）。
+* **归属标记**：ST 顶层 window 上的 `__silverMoonOwner = {instance, id, script, version, ts}`。
+  启动时比版本号（`versionRank()`）：已有**更新**的一份在跑，这一份就**让位**（什么都不做，只 warn）。
+  **v1.4.4 起同版本也要分高低**：v1.4.3 只比版本号，而「脚本库那份」和「CDN 那份」是**两个
+  不同的 `SCRIPT_ID`**，同为 v1.4.4 时两边都判「owner 不是我 → 让位」会同时不成立，于是
+  两份一起写共享设置。现在再加一个 **per-instance 身份**（`INSTANCE_ID`，优先 `getIframeName()`），
+  同版本时比对启动时刻（`INSTANCE_START_TS`）：**后来者接管**，`stillOwner()` 也用 instance 判，
+  被接管的那份从此不再自愈抢装。`status().owner` 能看现状（`mine: false` = 已让位/已卸载）。
 * **`pagehide` 只放弃归属**（`onPageHide()`）：`clearInjectStoreRetry()` + `releaseOwner()`，
   **绝不碰**正则、样式、`reasoning`。想真卸载走 `__silverMoon.uninstall()`（唯一会做完整拆卸的入口，
-  顺序是「先摘正则 → 再样式 → 再按钮 → 最后还原 `reasoning`」，摘完还会放弃归属）。
+  顺序是「先摘正则 → 再样式 → 再按钮 → 最后（且只有自己确实是归属者才）还原 `reasoning`」）。
+  **v1.4.4 起卸载是粘性的**：`cleanup()` 会置 `disposed`、停掉全部被动监听，并只在摘掉自己的东西时
+  还原自己铺的配置 —— v1.4.3 的问题是卸载之后来一次 `app_ready`，按钮和正则又被装回来了。
+  想重新接管：`__silverMoon.install()`。
 * **自愈**（`resyncIfStripped()`）：被动事件（`app_ready` / `chat_id_changed` / `settings_loaded` /
-  标签页切回来）时，如果「我们本来是装好的、现在正则却没了」，就补装一次。只在**原本装好**的
-  状态才自愈：让位态（`yielded`）、探针没过（`probe-failed`）本来就不该装，不去打扰。
+  标签页切回来）时，如果「我们本来是装好的、现在正则却没了」，就补装一次。只在**原本装好**
+  且**仍然归我管**（`disposed` 为假、`stillOwner()` 为真）的状态才自愈：让位态（`yielded`）、
+  探针没过（`probe-failed`）、已卸载都不去打扰。
   这一条是对「只能去脚本库关一下再开」的正面回应 —— **不需要手动开关脚本了**。
   **样式也单独算一路**：`<style id="reasoning-style-…">` 被别的实例按同名 id 摘掉时（老版
   v1.2 的 `cleanup()` 就会这么干，用户看到的是「明月本身也不美化了」），正则还在也照样把样式补回去 ——
@@ -399,14 +412,22 @@ __silverMoon.status().normalize  // 看 state 是不是 installed/present
 | **探针**（用 ST 自己的 `parseReasoningFromString` 试一遍） | 我们写进去的 wrapper 真会被解析掉吗？不过就**坚决不装**，否则等于往正文里写一串没人认的 wrapper | E1-E5 |
 | **让位**（`yieldToOtherRegexes`） | 别的启用正则在管同一批标签时不抢 | D1-D5 + `.work/live-conflict-check.js` |
 | **让位要连配置一起还**（`revertOwnReasoningConfig`） | 只让一半：正则没装、ST 的 reasoning 配置却被改了 → ST 自己去搬思维链、预设的包装链还在 → 正文和聊天记录被改坏 | R4-R8（真实预设 + 真实消息） |
+| **无变化不写回**（v1.4.4） | 酒馆助手 `updateTavernRegexesWith` 落地是 `saveSettings()` + `render_tavern_regexes_debounced()`（`tavern_regex.ts:249-256`）= **重排整段聊天**。规则没变还照写，就是每次开页面白排一次 | O1-O4 + A7/C7 |
 | **DOM 自检** | 事后可观测：有没有消息既出现块、又漏了 wrapper | G3/G4 |
 
-另外两道**幂等**保护（都是自检台抓出来才补上的）：
+另外几道**幂等 / 粘性**保护（都是自检台抓出来才补上的）：
 
-* 两条正则都带 `(?!canonical)` 负向预查 —— 规则不能对自己的产物再动手，
-  否则 `[metacognition]\n思考` 会被再拼一次前缀，思维块开头多一个空行；
-* 转义函数会把真换行写成 `\n` —— `canonicalPrefix` 自带换行，
-  真换行塞进 `findRegex` 会让 ST 的 `regexFromString`（`utils.js:1279`）当场解析失败。
+* **流式那条**带 `(?!canonicalPrefix)` 负向预查 —— 它不能对自己的产物再动手，
+  否则 `[metacognition]思考` 会被再拼一次前缀，思维块开头多一个前缀/空行。
+* **闭合那条**（v1.4.4 改）挡的是「**已经是完整 canonical 对**」（`(?!(?:cp)[\s\S]*?(?:cs))`），
+  **不是**「以 canonicalPrefix 开头」。只看开头会留下一个死角：别的预设直接吐
+  `[metacognition]思考[/metacognition]` 或 `[metacognition]思考</think>`（识别名单
+  `leadingThinkWrappers` 里本来就有这两对）时，闭合规则被挡住、流式规则又只认「没闭合」的情形，
+  两条都不动手 → **这种预设的思维链永远缩不进去**。改成看「完整对」之后这两种都能归一，
+  而已经写成 canonical 对的消息仍然幂等、也不会被思维链里引用的字面 close 标签提前截断。
+* 转义函数会把真换行写成 `\n` —— `canonicalPrefix` / `canonicalSuffix` 现在的字面量不带换行，
+  但这个转义照样要留着：真换行塞进 `findRegex` 会让 ST 的 `regexFromString`（`utils.js:1279`）
+  当场解析失败。
 
 ---
 
@@ -432,10 +453,10 @@ __silverMoon.status().normalize  // 看 state 是不是 installed/present
 ## 7. 自检台
 
 ```powershell
-node .work\st-reasoning-test.js        # 68 条断言（合成样本），报告写到 .work\st-reasoning-report.txt
+node .work\st-reasoning-test.js        # 73 条断言（合成样本），报告写到 .work\st-reasoning-report.txt
 node .work\dream-check2.js             # 12 条断言（你真实的预设 + 真实消息），报告写到 .work\dream-report.txt
 node .work\live-conflict-check.js      # 拿你真实的正则列表查冲突（只读，不回写）
-node .work\silver-moon-button-test.js  # 127 条断言（A 常驻 / B 失败态与写入重试 / C 点击重试 / D 无 API 降级 / E 同名复用 / F 让位 / G uninstall 完整拆卸 / H 静态接线 / J 秋青形状 / K 导入 json / L 常驻开关 / M 多实例归属权 / N pagehide 非破坏性 + 自愈（含只补样式不重装正则）），报告写到 .work\button-report.txt
+node .work\silver-moon-button-test.js  # 151 条断言（A 常驻+可点 / B 失败态与写入重试 / C 点击重试 / D 无 API 降级 / E 同名复用 / F 让位 / G uninstall 完整拆卸+粘性 / G2 非归属实例 uninstall / H 静态接线 / J 秋青形状 / K 导入 json / L 常驻开关 / M 多实例归属权 / N pagehide 非破坏性 + 自愈（含只补样式不重装正则）），报告写到 .work\button-report.txt
 node .work\double-instance-diag.js     # 复现「旧 iframe 的 pagehide 把新实例的成果拆掉」（只读诊断，用来验收 v1.4.3）
 node .work\dream-check.js              # 真实 <dream_plot> 消息的观察记录（不断言，只看输出）
 ```
@@ -562,6 +583,44 @@ __silverMoon.conflicts()          // 谁在跟我抢同一批标签
 ---
 
 ## 10. 更新记录
+
+* **v1.4.4**（一轮外部代码审查之后，只挑**在真实代码 + 真实 SillyTavern 上复现过**的 7 项修）
+  * **常驻按钮不再是摆设**：v1.4.2/1.4.3 只在失败态绑点击，所以「一开页面就直接成功」的用户
+    点它**毫无反应**（连提示都没有），而成功态那段「点了提示一句」的代码根本到不了。
+    现在两种状态都绑点击；点击语义统一成「**再同步一次并播报结果**」（成功 → success，
+    让位 → 如实告警，没好 → 告警重试）。见 §4.1。
+  * **无变化不写回**：`installNormalizeRegex()` 先读现有列表逐条比对，规则一模一样就直接
+    `present` 跳过写入。酒馆助手 `updateTavernRegexesWith` 落地是 `saveSettings()` +
+    `render_tavern_regexes_debounced()`（`tavern_regex.ts:249-256`）= **重排整段聊天**，
+    以前每次开页面/每次 `refresh()` 都白排一次。见 §5。回退/`takeOver` 语义不变。
+  * **闭合规则的 guard 从「开头是 canonicalPrefix」改成「已经是完整 canonical 对」**：
+    旧写法留下一个死角 —— 别的预设直接吐 `[metacognition]思考[/metacognition]` 或
+    `[metacognition]思考</think>`（识别名单里本来就有这两对）时，闭合规则被挡住、流式规则又
+    只认「没闭合」的情形，两条都不动手 → **这种预设的思维链永远缩不进去**。
+    改完这两种都能归一；已经写成 canonical 对的消息仍然幂等，也不会被思维链里引用的字面 close
+    标签提前截断（B10a-e 钉住）。
+  * **后台不再白扣重试预算**：`scheduleInjectStoreRetry()` 改成先查 `document.hidden` 再计数
+    （以前反着写，页面挂后台时会把 20 次预算耗光）。
+  * **卸载是粘性的 + 被动监听解绑**：`uninstall()` 之前只摘东西、不停监听，于是下一次
+    `app_ready` / `chat_id_changed` 会把按钮和正则**又装回来**。现在 `cleanup()` 置 `disposed`、
+    停掉全部 `eventOn` 句柄与 `visibilitychange` / `silver-moon:sync` 监听，状态打到 `off`；
+    `__silverMoon.install()` 能重新武装。返回值改成真实回执（本来没在管就是 `false`）。
+  * **归属标记加 per-instance 身份**：旧记录只有 `{id: SCRIPT_ID, version, ts}`，而脚本库那份与
+    CDN 那份是**两个不同的 `SCRIPT_ID`** → 同版本时两边都判「owner 不是我」，谁都不让位、一起写。
+    现在记 `{instance, id, script, version, ts}`（`INSTANCE_ID` 优先取 `getIframeName()`），
+    同版本比启动时刻：**后来者接管**；`stillOwner()` 与 `resyncIfStripped()` 也按 instance 判，
+    被接管的那份不再自愈抢装。见 §4.2。
+  * **非归属实例 `uninstall()` 不再撒谎**：强制路径只摘**自己名字**的正则/样式/按钮，
+    但**不还原别人的 `reasoning` 配置**，也不删别人的归属登记（G2 段钉住）。
+  * 自检台：`st-reasoning-test.js` 68 → **73 条**，`silver-moon-button-test.js` 127 → **151 条**，
+    `dream-check2.js` 12 条不变；导入用 json 按新源码重新打包（`content` 75637 字符，逐字一致）。
+  * **没改的三项**（审查里提到，我判定不该动）：冲突检测不扩到 `\[metacognition\]` 转义写法
+    （引擎本来就接受，放宽会让银月**更常让位** = 正是「缩不进去」的方向）；
+    `domSnapshot()` 仍用 `textContent`；非 global 作用域与原生回退路径的老边角。
+  * 顺带纠正审查里的一处误判：审查说「流式规则的自锁会让 `</think>` 永远变不成 `</thinking>`，
+    思维块长到一半僵住」——**不成立**。真 ST 每个 token tick 都拿**原始累积文本**重跑一边
+    （`public/script.js:3659-3665` 的 `cleanUpMessage({getMessage: text})` + `:3886-3896`
+    的 `this.continueMessage + text`），不是拿上一轮的正则输出接着跑；自检台 S1-S9 全绿也是这个原因。
 
 * **v1.4.3**
   * **修「整个没用了 / 思维链缩不进去 / 美化时有时无」的头号原因**：旧 iframe 的 `pagehide`
