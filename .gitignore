@@ -1,0 +1,12 @@
+# ── 依赖与包缓存：体积大、可复现，不入库 ──
+# 要重装（跑 .work 里的自检台需要）：cd .work && npm install
+.work/node_modules/
+.work/npm-cache/
+.work/node-test/node_modules/
+node_modules/
+npm-cache/
+
+# ── 诊断缓存与一次性产物 ──
+.dsh-diag/
+.work/chrome-profile*/
+.work/settings-backup-*.json
