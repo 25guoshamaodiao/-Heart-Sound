@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "1.3";
+  const VERSION = "1.4.3";
   const SCRIPT_ID = typeof getScriptId === "function" ? getScriptId() : "silver_moon_styler";
   const STYLE_ID = `reasoning-style-${SCRIPT_ID}`;
   const BACKUP_KEY = `__silvermoon_backup_${SCRIPT_ID}`;
@@ -13,12 +13,15 @@
   //    —— 它会把这两个字符串 escape 一遍再编译（escapeRegex 见 scripts/utils.js:1269）。
   //    所以老写法 "\\[metacognition\\]"（正则年代的转义）在现在的 ST 上只会去匹配
   //    「带反斜杠的 \[metacognition\]」，正文里正常的 [metacognition] 永远匹配不到。
-  //    这里改成字面量，和 default-user/reasoning/明月.json 里的值保持一致。
+  //    这里改成字面量。注意：早先注释里写的「和 default-user/reasoning/明月.json 一致」
+  //    已经过期 —— 那个模板文件在本机 reasoning/ 目录下并不存在（只有 Blank / DeepSeek /
+  //    Gemma 4 / OpenAI Harmony / Think XML / 梦鲸思客思考）。权威值就是下面 canonicalPrefix
+  //    / canonicalSuffix 这两个字面量本身。
   const CONFIG = {
     manageReasoningConfig: true,
     onlyIfUnset: true,
-    prefix: "[metacognition]\n",
-    suffix: "\n</thinking>",
+    prefix: "[metacognition]",
+    suffix: "</thinking>",
     autoParse: true,
     thinkingTitle: "✦ 掬水月在手，弄花香满衣",
     doneTitle: "✦ 银月照积雪",
@@ -72,6 +75,35 @@
     arbitrationScopes: ["global", "preset", "character"],
     // 控制台多说一点
     verbose: false,
+
+    // ============ 注入按钮（v1.4 起，v1.4.2 改成常驻）============
+    // 背景：本脚本过去除 init() 之外没有任何触发点，安装归一化正则和写 reasoning 配置都只
+    // 发生一次。开局探针没过就永久卡在 probe-failed，玩家唯一能自救的动作是「在脚本库里关
+    // 一下再开」——重跑 init()。v1.4 把它变成一个按钮，但那时的设计是**只在失败时出现**，
+    // 结果是：它一出现就说明已经坏了，成功时反而什么都没有，人看不到「到底在没在工作」。
+    //
+    // v1.4.2 改成**常驻**（injectButtonAlways: true，默认）：按钮永远在脚本库/快捷栏里，
+    // 状态不写进名字（见下），而是走 mode —— 成功/让位/关着时按钮在但点了只提示一句，
+    // 「本次没注入上」时才绑点击、点一下就地重试注入。
+    // 关掉 injectButtonAlways 可以退回 v1.4 的「只在失败时露面」。
+    showInjectButton: true,
+    injectButtonAlways: true,
+    // ⚠️ 按钮名必须恒定：「条目身份」（findIndex by name）和「事件名」（getButtonEvent(name)）
+    // 都锚在这个字符串上，改名字会被当成新按钮 → 列表里堆重复条目。所以状态不写进名字，
+    // 靠 status().injectButton.mode 与弹窗表达。
+    injectButtonName: "银月·注入",
+    // 老配置项，v1.4.2 起只是注释性质的默认文案。
+    injectButtonDescription: "思维链归一没接管上。点一下立刻重试注入一次。",
+    // 哪些状态算「这次没注入上」，按钮走「可重试」模式（银月·注入）。刻意**不含** yielded：
+    // yielded 是「有别的正则在管同一批标签，银月主动让位」，属于设计行为，不是失败。
+    // 想让它也进可重试模式就往数组里加 "yielded"。
+    injectRetryStates: ["probe-failed", "failed"],
+
+    // 酒馆助手 4.11.3 实测：把按钮写进列表之后、APP_READY 之前，那次写会被
+    // 静默丢掉（store 里 enabled_scripts_with_source 还是空数组）。所以写完必须
+    // 回读校验，没写进去就隔 injectStoreRetryDelayMs 再补，最多补 injectStoreRetryMax 次。
+    injectStoreRetryDelayMs: 300,
+    injectStoreRetryMax: 20,
   };
 
   function log(...args) {
@@ -103,6 +135,69 @@
       .replace(/\\/g, "\\\\")
       .replace(/'/g, "\\'")
       .replace(/\r?\n/g, "\\A ");
+  }
+
+  // ===================== 实例归属权（多实例 / iframe 重建防护）=====================
+  //
+  // 酒馆助手把每个脚本跑在各自的 iframe 里，但**共享同一份 ST 设置**
+  // （power_user.reasoning / extension_settings.regex / 脚本按钮列表）。于是有两个坑：
+  //
+  //  ① 重建 iframe 时的「拆除竞态」：改脚本内容、切预设、重载设置都会把旧 iframe 拆掉再建
+  //     一个新的。新实例 init 完（正则、样式、reasoning 都铺好）之后，旧 iframe 的 pagehide
+  //     才触发 —— 它一 cleanup 就把新实例刚铺好的东西全摘了：正则没了 → 思维链缩不进去
+  //     （字面 wrapper 直接留在正文里）；样式没了 → 美化消失。这正是「有时候缩不进去」
+  //     「得去脚本库开关一次脚本才好」的真因。
+  //  ② 同时跑两份银月（脚本库里一份 + 某个预设的「一键启动器」import 的 CDN 一份）：
+  //     两份互相拆、互相写，谁最后动手谁说了算。
+  //
+  // 对策：在 ST 顶层 window 上放一个归属标记，按版本号让最新的一份说了算；
+  // pagehide 只放弃归属，**绝不碰共享设置**（那正是新实例要用的）。
+  // 真想彻底卸载走 __silverMoon.uninstall()。
+  const OWNER_KEY = "__silverMoonOwner";
+  let ownsInstance = true;
+
+  function stTopWindow() {
+    try {
+      return window.top || window;
+    } catch (_) {
+      return window;
+    }
+  }
+
+  function readOwner() {
+    try {
+      const o = stTopWindow()[OWNER_KEY];
+      return o && typeof o === "object" ? o : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function writeOwner() {
+    try {
+      stTopWindow()[OWNER_KEY] = { id: SCRIPT_ID, version: VERSION, ts: Date.now() };
+    } catch (_) { /* noop */ }
+  }
+
+  function releaseOwner() {
+    try {
+      const top = stTopWindow();
+      const cur = top[OWNER_KEY];
+      if (cur && cur.id === SCRIPT_ID) delete top[OWNER_KEY];
+    } catch (_) { /* noop */ }
+  }
+
+  function stillOwner() {
+    const cur = readOwner();
+    return !cur || cur.id === SCRIPT_ID;
+  }
+
+  // "1.4.10" > "1.4.9"；认不出来的（老版本没有 VERSION）算 0。
+  function versionRank(v) {
+    return String(v || "")
+      .split(".")
+      .map((x) => parseInt(x, 10) || 0)
+      .reduce((acc, n) => acc * 1000 + Math.min(n, 999), 0);
   }
 
   // 优先同步保存，回退到防抖保存。pagehide 时防抖版可能来不及落盘。
@@ -266,6 +361,317 @@
       if (typeof window !== "undefined" && typeof window[name] === "function") return window[name];
     } catch (_) { /* noop */ }
     return null;
+  }
+
+  // ============ 注入按钮（v1.4 起 / v1.4.1 修真实 API / v1.4.2 改常驻） ============
+  //
+  // 为什么要它：本脚本过去除 init() 之外没有任何触发点，安装归一化正则和写 reasoning
+  // 配置都只发生一次。开局探针没过就永久卡在 probe-failed，玩家唯一能自救的动作是
+  // 「脚本库里关一下再开」——重跑 init()。这里把它变成一个按钮。
+  //
+  // 【v1.4.1 修的是什么】v1.4 照小 cot 的写法用了「注册按钮」+「监听」两个名字，但酒馆
+  // 助手 4.11.3 **没有这两个全局**（全仓 0 命中，连 node_modules 里都没有）：
+  //   · 那个「注册」函数不存在 —— 公开 API 里只有读/写整个按钮列表的那一对；
+  //   · 「监听」那个名字也不存在 —— 小 cot 里同名的是它自己在 cot-heart-soundV3.js:1358
+  //     定义的**局部函数**，不是酒馆助手给的全局，照抄必然拿不到。
+  // 后果：按钮其实注册上了，但点击回调绑不上，点了没反应，人还是只能回去开关脚本。
+  //
+  // 真实可用的 API（src/iframe/predefine.js:14-18 把 _bind 的键去掉下划线绑到 iframe 上）：
+  //   · 读：`getScriptButtons()` —— 返回的是 **klona 克隆**（src/function/script.ts:64），
+  //     改返回值没用，必须写回去；
+  //   · 写：`replaceScriptButtons(list)` —— 写回本脚本自己的按钮列表（src/function/script.ts:73-83）；
+  //   · 事件名：`getButtonEvent(名字)`；
+  //   · 绑定：`eventOn(事件名, 处理函数)` —— 返回 { stop() }（src/function/event.ts:86）。
+  //
+  // 【第二个坑：写会被静默丢掉】`_replaceScriptButtons` 先从 store 里查脚本
+  // （src/store/iframe_runtimes/script.ts:27 的 enabled_scripts_with_source 在
+  // global_settings.app_ready 为假时返回空数组），查不到就 `if(!script) return;`
+  // （src/function/script.ts:76-78）**静默返回**。脚本 iframe 常挂在 app_ready 之前，
+  // 那一次写就白写了，之后没人补 —— 这就是「要手动在脚本库里建一个按钮才看得到」的真因。
+  // 对策：写完立刻回读校验，没写进去就按间隔重试，等 app_ready 之后再补一次。
+  //
+  // 全流程 try/catch：酒馆助手全局不存在时只降级（按钮没有），绝不打断 init()。
+  let injectButtonEvent = null;
+  let injectButtonEventBound = false;
+  let injectButtonOff = null; // eventOn 返回的 { stop() }，cleanup 时解绑
+  let injectButtonRegistered = false;
+  let injectButtonVisible = false;
+  let injectButtonStoreReady = false; // 回读校验过：store 真的接受了这次写入
+  let injectStoreRetryTimer = null;
+  let injectStoreRetryCount = 0;
+  let injectStoreGaveUp = false;
+  let injectRetrying = false;
+  let injectRetryCount = 0;
+
+  function scriptButtonApi() {
+    const get = bareGlobal("getScriptButtons");
+    const replace = bareGlobal("replaceScriptButtons");
+    const getEvent = bareGlobal("getButtonEvent");
+    const on = bareGlobal("eventOn");
+    if (typeof get !== "function" || typeof replace !== "function") return null;
+    return { get, replace, getEvent, on };
+  }
+
+  // 按钮这次该是「可重试」还是「已就位」。必须看 state.state —— no-wrappers 时
+  // normalizeState.enabled 也是 true。注意返回的是**布尔**：只要开着常驻按钮，
+  // 两种情况都得有按钮，区别只在绑不绑点击（名字恒定，不随状态变）。
+  function injectButtonMode(state) {
+    const s = state || normalizeState;
+    if (!CONFIG.showInjectButton) return false;
+    if (!CONFIG.adoptLeadingThink) return false;
+    const list = Array.isArray(CONFIG.injectRetryStates) ? CONFIG.injectRetryStates : [];
+    return list.indexOf(s.state) !== -1;
+  }
+
+  function injectButtonLabel() {
+    // 名字必须恒定，见 CONFIG.injectButtonName 的注释。这个函数留着，是为了把
+    // 「名字是身份、不是状态」这件事写在一处，将来真要显示状态也是加 description 之类，
+    // 而不是改 name。
+    return CONFIG.injectButtonName;
+  }
+
+  function onInjectButtonClick() {
+    if (injectRetrying) return Promise.resolve(false);
+    // 常驻按钮 → 成功态也可点。点了就别白跑一遍探测（重跑 syncLeadingThink 会重写
+    // reasoning 配置、重装正则），直接告诉玩家「已经在位、不用点」。
+    if (!injectButtonMode(normalizeState)) {
+      toast("银月：思维链归一已就位，不用点它。", "info");
+      return Promise.resolve(true);
+    }
+    injectRetrying = true;
+    injectRetryCount += 1;
+    toast("银月：正在重试注入……", "info");
+    log("注入按钮被点了（第 " + injectRetryCount + " 次）");
+    return Promise.resolve()
+      .then(() => syncLeadingThink())
+      .then((state) => {
+        const mode = injectButtonMode(state);
+        const ok = state && (state.state === "installed" || state.state === "present");
+        if (ok) {
+          toast("银月：思维链归一已就位。", "success");
+        } else {
+          const why = (state && state.note) || (state && state.state) || "未知";
+          toast("银月：还是没注入上（" + ((state && state.state) || "?") + "）。" + why + "　详情：控制台 __silverMoon.status()", "warning");
+        }
+        log("重试结果：" + JSON.stringify({ state: state && state.state, note: state && state.note, mode: mode ? "retry" : "ok" }));
+        return ok;
+      })
+      .catch((error) => {
+        warn("注入按钮重试时抛错：", error);
+        toast("银月：重试注入时出错，看控制台。", "warning");
+        return false;
+      })
+      .then((ok) => {
+        injectRetrying = false;
+        syncInjectButton(); // 按新状态刷新按钮（写法幂等，名字恒定）
+        return ok;
+      });
+  }
+
+  // 幂等：syncLeadingThink() 落地后、每次重试后、app_ready 等事件后、cleanup() 时都会调。
+  //
+  // v1.4.2 起是**常驻**按钮：
+  //   · 成功（installed / present）→ 按钮在，但不绑点击（点了只提示一句「不用点」）；
+  //   · 失败（probe-failed / failed）→ 按钮在，绑上点击 → 重试注入；
+  //   · 两者都要按钮存在且 visible；名字恒定（见 injectButtonLabel() 的注释）。
+  // injectButtonAlways:false 时才退回 v1.4 的「失败才露面」。
+  // 写入仍然要回读校验：app_ready 之前那次写会被静默丢掉（见本段开头注释）。
+  function syncInjectButton() {
+    try {
+      if (injectRetrying) return;
+      const api = scriptButtonApi();
+      const mode = injectButtonMode(normalizeState);
+
+      // 功能整个关掉了才撤按钮 + 收掉重试预算（见 showInjectButton / adoptLeadingThink）。
+      // ⚠️ 别在「拿不到 API」或「store 没就绪」时清预算：常驻按钮会频繁同步，清一次就等于
+      // 把补写循环重置，store 长时间不就绪时会变成无限重试（v1.4.2 开发中真踩到过：
+      // storeGaveUp 永远为假、计数卡在 1）。
+      if (!CONFIG.showInjectButton || !CONFIG.adoptLeadingThink) {
+        if (api && injectButtonRegistered) setScriptButtonVisible(api, false);
+        clearInjectStoreRetry();
+        return;
+      }
+
+      if (!api) {
+        if (mode) {
+          warn("银月：注入按钮不可用 —— 拿不到 getScriptButtons / replaceScriptButtons（酒馆助手 4.11.3 起才有）。" +
+            "失败原因看上面的弹窗和 __silverMoon.status()；也可以直接调 __silverMoon.retryInject()。");
+        }
+        return;
+      }
+
+      // injectButtonAlways:false → 退回 v1.4 的「只在没注入上时露面」。
+      // （常驻是默认；这条只是给不想一直看到按钮的人留的开关。）
+      if (!mode && !CONFIG.injectButtonAlways) {
+        if (injectButtonRegistered && !setScriptButtonVisible(api, false)) scheduleInjectStoreRetry();
+        return;
+      }
+
+      if (!registerInjectButton(api)) {
+        warn("银月：写入注入按钮失败，失败时只能看弹窗。");
+        return;
+      }
+
+      if (mode) {
+        if (!injectButtonEventBound) bindInjectButtonEvent(api);
+      }
+      // 已就位 → **不在这里解绑**：syncLeadingThink() 中途会把 normalizeState 重置成
+      // off（那一刻 mode 也是 ok），在这里解绑会把「重试中」的点击通道误拆掉。
+      // 交给 onInjectButtonClick() 自己按 mode 判断该不该干活。
+
+      const ready = setScriptButtonVisible(api, true);
+      if (!ready) scheduleInjectStoreRetry();
+    } catch (error) {
+      warn("银月：同步注入按钮时出错（已忽略）：", error);
+    }
+  }
+
+  // 把「本脚本的按钮」在列表里收敛成唯一一条：同名重复项全部丢掉，只留第一条被改写的。
+  // 必须去重 —— 常驻按钮会在每次事件同步时重写列表，如果只是 push，列表里会堆出
+  // 一堆同名条目（v1.4.2 开发中真的踩到过：一次成功切换就被写成两条）。
+  // getScriptButtons() 给的是克隆，所以只能读出来 → 改 → replaceScriptButtons 写回去。
+  function writeInjectButtonEntry(api, visible) {
+    const name = CONFIG.injectButtonName;
+    const all = api.get();
+    const list = Array.isArray(all) ? all.slice() : [];
+    let hit = false;
+    const out = [];
+    for (const item of list) {
+      if (!item || item.name !== name) { out.push(item); continue; }
+      if (hit) continue; // 重复的同名条目：丢掉
+      hit = true;
+      // 注意：这里不能采纳别的键。酒馆助手的 ScriptButton 只有 name + visible，
+      // 多塞键反而可能让写入静默失败。
+      out.push(Object.assign({}, item, { name: name, visible: !!visible }));
+    }
+    if (!hit) out.push({ name: name, visible: !!visible });
+    api.replace(out);
+  }
+
+  // 让按钮存在于「本脚本自己的」按钮列表里，并把 visible 写成 true。
+  function registerInjectButton(api) {
+    try {
+      writeInjectButtonEntry(api, true);
+      injectButtonRegistered = true;
+      injectButtonVisible = true;
+      return true;
+    } catch (error) {
+      warn("银月：写入注入按钮列表失败：", error);
+      return false;
+    }
+  }
+
+  // 切换可见性，并**回读校验** store 到底收没收下这次写入。
+  // 返回 true = 回读里按钮确实存在且可见性与期望一致；false = 这次写被丢了（多半是
+  // app_ready 还没到，_replaceScriptButtons 查不到脚本，静默 return）。
+  function setScriptButtonVisible(api, visible) {
+    const name = CONFIG.injectButtonName;
+    try {
+      writeInjectButtonEntry(api, visible);
+
+      const back = api.get();
+      const found = (Array.isArray(back) ? back : []).find((b) => b && b.name === name);
+      const ok = !!found && !!found.visible === !!visible;
+      injectButtonVisible = ok ? !!visible : false;
+      if (ok) injectButtonStoreReady = true;
+      log("注入按钮可见性 → " + (visible ? "显示" : "隐藏") + "（回读" + (ok ? "一致" : "不一致：这次写被丢了") + "）");
+      return ok;
+    } catch (error) {
+      warn("银月：切换注入按钮可见性失败（已忽略）：", error);
+      injectButtonVisible = false;
+      return false;
+    }
+  }
+
+  // store 没就绪时的补写。只补「让按钮出现」这一段，**绝不重跑 syncLeadingThink()/探测**，
+  // 免得把 probe-failed 这类状态搅乱。
+  function scheduleInjectStoreRetry() {
+    if (injectStoreRetryTimer) return;
+    if (injectStoreGaveUp) return;
+    const max = Math.max(0, Number(CONFIG.injectStoreRetryMax) || 0);
+    if (injectStoreRetryCount >= max) {
+      if (!injectStoreGaveUp) {
+        injectStoreGaveUp = true;
+        warn("银月：注入按钮试了 " + max + " 次还是写不进酒馆助手按钮列表（多半是酒馆助手还没就绪）。" +
+          "失败原因仍看弹窗与 __silverMoon.status()；也可以等页面稳一点再点一次。");
+      }
+      return;
+    }
+    injectStoreRetryCount += 1;
+    try {
+      const doc = getTopDocument();
+      if (doc && doc.hidden) return; // 页面在后台就别空转，等 visibilitychange 补
+    } catch (_) { /* noop */ }
+    const delay = Math.max(0, Number(CONFIG.injectStoreRetryDelayMs) || 0);
+    try {
+      injectStoreRetryTimer = setTimeout(() => {
+        injectStoreRetryTimer = null;
+        syncInjectButton();
+      }, delay);
+    } catch (_) {
+      injectStoreRetryTimer = null;
+    }
+  }
+
+  function clearInjectStoreRetry() {
+    if (injectStoreRetryTimer) {
+      try { clearTimeout(injectStoreRetryTimer); } catch (_) { /* noop */ }
+      injectStoreRetryTimer = null;
+    }
+    injectStoreRetryCount = 0;
+    injectStoreGaveUp = false;
+  }
+
+  // 解绑点击（幂等）。成功态用它把重试入口摘掉；cleanup() 也用它。
+  function unbindInjectButtonEvent() {
+    if (!injectButtonOff) {
+      injectButtonEventBound = false;
+      return;
+    }
+    const off = injectButtonOff;
+    injectButtonOff = null;
+    injectButtonEventBound = false;
+    try {
+      if (typeof off.stop === "function") off.stop();
+      else if (typeof off === "function") off();
+    } catch (_) { /* noop */ }
+  }
+
+  // 事件名走 getButtonEvent，绑定走 eventOn —— 这两条才是酒馆助手真实的通道。
+  // （那个「注册全局」和「监听全局」在 4.11.3 都不存在，见本段开头。）
+  // 常驻按钮下**只绑一次、整条生命周期不解绑**（除了 cleanup）：已就位时点击的处理
+  // 交给 onInjectButtonClick() 自己判断，见那里的注释。
+  function bindInjectButtonEvent(api) {
+    try {
+      if (injectButtonEventBound) return;
+      const name = CONFIG.injectButtonName;
+      let eventName = injectButtonEvent;
+      if (!eventName && typeof api.getEvent === "function") eventName = api.getEvent(name);
+      if (!eventName) {
+        warn("银月：按钮写进去了，但拿不到按钮事件（getButtonEvent 不可用或列表里还没这个按钮），" +
+          "点了不会有反应 —— 请改用 __silverMoon.retryInject()。");
+        return;
+      }
+      injectButtonEvent = eventName;
+      if (typeof api.on !== "function") {
+        warn("银月：拿不到 eventOn，注入按钮点了不会有反应 —— 请改用 __silverMoon.retryInject()。");
+        return;
+      }
+      injectButtonOff = api.on(eventName, onInjectButtonClick);
+      injectButtonEventBound = true;
+      log("注入按钮事件已绑定：" + String(eventName));
+    } catch (error) {
+      warn("银月：绑定注入按钮事件失败（已忽略）：", error);
+    }
+  }
+
+  function hideInjectButton() {
+    clearInjectStoreRetry();
+    unbindInjectButtonEvent();
+    if (!injectButtonRegistered || !injectButtonVisible) return;
+    const api = scriptButtonApi();
+    if (!api) return;
+    setScriptButtonVisible(api, false);
   }
 
   // ST 的 findRegex 存成 "/source/flags"，所以：
@@ -822,6 +1228,43 @@
     };
   }
 
+  // 注入按钮的对外快照（status().injectButton 和 __silverMoon.injectButton() 共用）。
+  // mode 是 v1.4.2 新增字段：true = 「可重试」（点了会重跑 syncLeadingThink()），
+  // false = 「已就位」（点了只提示一句、不重跑探测）。want 保留为旧名（= mode）。
+  function injectButtonSnapshot() {
+    const mode = injectButtonMode(normalizeState);
+    return {
+      name: CONFIG.injectButtonName,
+      // 名字恒定（见 CONFIG.injectButtonName 注释）；mode 才是状态
+      label: injectButtonLabel(),
+      always: !!CONFIG.injectButtonAlways,
+      mode: mode ? "retry" : "ok",
+      registered: injectButtonRegistered,
+      visible: injectButtonVisible,
+      want: mode,
+      event: injectButtonEvent,
+      bound: injectButtonEventBound,
+      // false = 回读校验发现按钮写不进酒馆助手列表（多半是 app_ready 还没到）
+      storeReady: injectButtonStoreReady,
+      retrying: injectRetrying,
+      retryCount: injectRetryCount,
+      storeRetryCount: injectStoreRetryCount,
+      storeGaveUp: injectStoreGaveUp,
+    };
+  }
+
+  // 我还在管吗？（多实例：让位的那份 mine=false，什么都不做）
+  function ownerSnapshot() {
+    const cur = readOwner();
+    return {
+      self: SCRIPT_ID,
+      version: VERSION,
+      mine: ownsInstance && stillOwner(),
+      // 现在 ST 页面上登记的归属（null = 还没有人登记）
+      current: cur ? { id: cur.id, version: cur.version } : null,
+    };
+  }
+
   function exposeApi() {
     try {
       const api = {
@@ -831,26 +1274,40 @@
           reasoning: reasoningSnapshot(),
           normalize: Object.assign({}, normalizeState),
           conflicts: findConflicts(),
+          injectButton: injectButtonSnapshot(),
+          // 多实例时看这里：mine=false 表示这一份已经让位给更新的实例
+          owner: ownerSnapshot(),
         }),
         selfCheck,
         probe: probeCanonicalParse,
         conflicts: findConflicts,
         reasoning: reasoningSnapshot,
         normalizeRegex: () => buildNormalizeRules().map((r) => ({ name: r.name, find: r.find, replace: r.replace, streaming: r.streaming })),
+        // 注入重试按钮的状态（v1.4 / v1.4.1）
+        injectButton: injectButtonSnapshot,
+        // 等价于点一下注入按钮（按钮不可用时的替代入口）
+        retryInject: onInjectButtonClick,
         // 强制接管：忽略冲突，装归一化正则
         takeOver: () => {
           forcedTakeOver = true;
-          return syncLeadingThink();
+          return syncLeadingThink().then((s) => { syncInjectButton(); return s; });
         },
         // 重新读一次 CONFIG / ST 配置再同步（改完 CONFIG 不用刷页面）
         refresh: () => {
           injectConfig();
-          return syncLeadingThink();
+          return syncLeadingThink().then((s) => { syncInjectButton(); return s; });
         },
-        uninstall: () => removeNormalizeRegex(),
+        uninstall: () => {
+          // 完整拆卸（摘正则 + 去样式 + 收按钮 + 还原 reasoning），并且放弃归属，
+          // 免得下一份实例因为「已有更新的一份在跑」而错误让位。
+          cleanup();
+          forcedTakeOver = false;
+          log("SilverMoon 已完整拆卸（uninstall）。");
+          return true;
+        },
         install: () => {
           forcedTakeOver = false;
-          return syncLeadingThink();
+          return syncLeadingThink().then((s) => { syncInjectButton(); return s; });
         },
       };
       window.__silverMoon = api;
@@ -1210,13 +1667,60 @@
     }
   }
 
-  // 完整清理：移除样式 + 卸载归一化正则 + 恢复被本脚本改动的 reasoning 配置
+  // 样式还在不在（顶层文档和当前文档都要看；任何一个缺了都算缺）。
+  function styleMissing() {
+    const topDoc = getTopDocument();
+    const hasTop = !!topDoc?.getElementById?.(STYLE_ID);
+    const hasSelf = !!document?.getElementById?.(STYLE_ID);
+    if (topDoc === document) return !hasTop;
+    return !hasTop || !hasSelf;
+  }
+
+  // 完整拆卸：移除样式 + 卸载归一化正则 + 恢复被本脚本改动的 reasoning 配置 + 收掉按钮。
   // 顺序重要：必须**先**摘掉归一化正则，再还原 prefix/suffix。反过来的话，
   // 正则还在往正文里写 wrapper、ST 却已经不再解析它，正文就会留下字面 wrapper。
+  //
+  // ⚠ 这是「用户明确要卸载」用的（__silverMoon.uninstall()）。**pagehide 不走这里**
+  // （一旦被更新的实例接管，这份就不该再动共享设置，只摘自己那份样式）。
   function cleanup() {
-    removeStyle();
-    removeNormalizeRegex();
-    restoreReasoningConfig();
+    if (ownsInstance && stillOwner()) {
+      removeNormalizeRegex();
+      removeStyle();
+      hideInjectButton();
+      restoreReasoningConfig();
+    }
+    releaseOwner();
+  }
+
+  // iframe 被拆掉时**只放弃归属 + 收掉自己的定时器**，绝不碰 ST 设置、正则、样式。
+  // 原因见文件上方「实例归属权」：pagehide 经常发生在新实例 init **之后**，
+  // 这里要是执行完整 cleanup，就会把新实例刚铺好的正则/样式/reasoning 一起拆掉，
+  // 表现就是「思维链缩不进去 / 美化时有时无 / 得开关一次脚本才好」。
+  function onPageHide() {
+    clearInjectStoreRetry();
+    releaseOwner();
+  }
+
+  // 自愈：被别的实例收摊、或设置被重载时把我们自己的归一化正则/样式摘掉了，就补装回来。
+  // 只在「我们本来是装好的」情况下动作：让位态（yielded）、探针没过（probe-failed）
+  // 本来就不该装，不去打扰。
+  function resyncIfStripped() {
+    try {
+      if (!ownsInstance) return;
+      const wasLive = normalizeState.state === "installed" || normalizeState.state === "present";
+      if (!wasLive) return;
+
+      // 样式单独算一路：v1.2 那种老实例的 cleanup() 会按同一个 STYLE_ID 把样式删掉，
+      // 表现就是用户说的「明月本身也不美化了」。正则还在也要把样式补回去。
+      if (styleMissing()) {
+        injectStyle();
+        log("自愈：样式被摘掉了，补回来了。");
+      }
+
+      if (hasNormalizeRegex()) return;
+      warn("银月：归一化正则被摘掉了（多半是别的实例收摊或设置重载），重新装上。");
+      syncLeadingThink().then(syncInjectButton);
+    } catch (_) { /* noop */ }
   }
 
   function checkCompatibility() {
@@ -1237,14 +1741,75 @@
   }
 
   function init() {
-    cleanup(); // 防御：脚本被重新加载时先清理旧实例残留，避免重复叠加
+    // ① 同一个 window 里被跑第二遍（重复 import / 双重加载）就别再来一次，
+    //    否则两套状态互相覆盖。
+    try {
+      if (window.__silverMoonRuntime) {
+        warn("银月：这个 window 里已经跑过一份了，跳过重复初始化。");
+        return;
+      }
+      window.__silverMoonRuntime = true;
+    } catch (_) { /* noop */ }
+
+    // ② 已经有**更新**的一份银月在跑就让位：两份同时写共享设置只会互相拆。
+    const owner = readOwner();
+    if (owner && owner.id !== SCRIPT_ID && versionRank(owner.version) > versionRank(VERSION)) {
+      ownsInstance = false;
+      warn(
+        `银月：已有一份更新的在跑（v${owner.version}），这一份（v${VERSION}）让位，不做任何改动。` +
+          `　想确认状态：__silverMoon.status()`,
+      );
+      return;
+    }
+    ownsInstance = true;
+    writeOwner();
+
+    // 注意：这里**不调用 cleanup()**（v1.4.3 起）。旧版 init 开头 cleanup 是为了清
+    // 「同窗口重复加载」的残留，但那会跨 iframe 拆掉另一个实例刚铺好的正则/样式 ——
+    // 见文件上方「实例归属权」。本窗口第一次初始化，要装的都由 injectStyle() /
+    // syncLeadingThink() 幂等补上。
     injectConfig();
     injectStyle();
     checkCompatibility();
-    syncLeadingThink(); // 接管其他预设的开头思维链（默认关，见 CONFIG.adoptLeadingThink）
+    syncLeadingThink().then(syncInjectButton); // 接管其他预设的开头思维链（默认开，见 CONFIG.adoptLeadingThink）
     exposeApi();
-    window.addEventListener("pagehide", cleanup);
+    window.addEventListener("pagehide", onPageHide);
+    // 给「不想开控制台」的人留一个重新注入的口子：
+    //   window.dispatchEvent(new Event("silver-moon:sync"))
+    window.addEventListener("silver-moon:sync", () => {
+      syncLeadingThink().then(syncInjectButton);
+    });
+    bindPassiveSyncTriggers();
     log(`SilverMoon styler initialized (v${VERSION}).`);
+  }
+
+  // 纯兜底：
+  //  · syncInjectButton() —— 确保常驻按钮真的写进列表、模式是对的（**不重跑
+  //    syncLeadingThink()**，不碰 ST 配置、不动探测结果）。
+  //  · resyncIfStripped() —— 只在我们本来是装好的、而现在正则没了的时候补装一次
+  //    （多实例互拆 / 设置重载后的自愈）。
+  //  · app_ready：酒馆助手把按钮目的地（聊天输入框那条 #qr--bar）挂出来的时刻，
+  //    也是之前那次「写着写着被 store 丢掉」之后最该补一次的时刻。
+  //  · chat_id_changed / settings_loaded：切聊天、重载设置后按钮列表会重建。
+  //  · visibilitychange：页面从后台回来时把因 document.hidden 而暂停的重试续上。
+  function bindPassiveSyncTriggers() {
+    const on = bareGlobal("eventOn");
+    const names = ["app_ready", "chat_id_changed", "settings_loaded"];
+    if (typeof on === "function") {
+      for (const name of names) {
+        try {
+          on(name, () => { syncInjectButton(); resyncIfStripped(); });
+        } catch (_) { /* 老版本没有这个事件就跳过 */ }
+      }
+    }
+    try {
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+          syncInjectButton();
+          resyncIfStripped();
+        }
+      });
+    } catch (_) { /* noop */ }
   }
 
   // 启动（使用 jQuery 以确保在动态加载时也能正确执行）
